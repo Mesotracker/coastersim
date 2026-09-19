@@ -1,0 +1,6 @@
+{
+  "name": "Coaster Forge",
+  "description": "Rollercoaster designer and 3D POV ride simulator with realistic physics, loop track editing, imperial telemetry, and real-time speed graph.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
