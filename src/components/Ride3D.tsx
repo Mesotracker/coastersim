@@ -7,6 +7,16 @@ import { Theme } from '../lib/themes';
 export type CamMode = 'pov' | 'chase' | 'orbit';
 export type WeatherType = 'day' | 'sunset' | 'night' | 'storm';
 
+export type SupportStyle = 'auto' | 'tubular' | 'wooden' | 'truss' | 'flanged';
+export type SupportDensity = 'sparse' | 'medium' | 'normal' | 'dense';
+
+export interface SupportConfig {
+  style: SupportStyle;
+  density: SupportDensity;
+  color?: string;
+  crossBracing: boolean;
+}
+
 interface Props {
   built: BuiltTrack;
   simRef: React.RefObject<SimState>;
@@ -15,6 +25,7 @@ interface Props {
   camMode: CamMode;
   weather?: WeatherType;
   aerialFollow?: boolean;
+  supportConfig?: SupportConfig;
 }
 
 class PointsCurve extends THREE.Curve<THREE.Vector3> {
@@ -93,6 +104,7 @@ export default function Ride3D({
   camMode,
   weather = 'day',
   aerialFollow = true,
+  supportConfig,
 }: Props) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const stateRef = useRef<{
@@ -129,8 +141,8 @@ export default function Ride3D({
     fov: number;
     ready: boolean;
   } | null>(null);
-  const propsRef = useRef({ built, simRef, theme, material, camMode, weather, aerialFollow });
-  propsRef.current = { built, simRef, theme, material, camMode, weather, aerialFollow };
+  const propsRef = useRef({ built, simRef, theme, material, camMode, weather, aerialFollow, supportConfig });
+  propsRef.current = { built, simRef, theme, material, camMode, weather, aerialFollow, supportConfig };
 
   // ------------------------------------------------------------------ setup
   useEffect(() => {
@@ -861,8 +873,9 @@ export default function Ride3D({
           roughness: 0.40,
           metalness: 0.52,
         });
+        const supColor = supportConfig?.color || theme.support;
         supMat = new THREE.MeshStandardMaterial({
-          color: new THREE.Color(theme.support),
+          color: new THREE.Color(supColor),
           roughness: 0.42,
           metalness: 0.45,
         });
@@ -872,6 +885,15 @@ export default function Ride3D({
           metalness: 0.05,
         });
       }
+
+      const isWood = material === 'wood';
+      const braceColor = new THREE.Color(supportConfig?.color || (isWood ? '#854d0e' : theme.support))
+        .multiplyScalar(isWood ? 0.85 : 0.78);
+      const braceMat = new THREE.MeshStandardMaterial({
+        color: braceColor,
+        roughness: isWood ? 0.92 : 0.50,
+        metalness: isWood ? 0.03 : 0.40,
+      });
 
       const brakeMat = new THREE.MeshStandardMaterial({
         color: 0xd97706,
@@ -1000,45 +1022,253 @@ export default function Ride3D({
         st.trackGroup.add(boostStators);
       }
 
-      // Supports with realistic tubular columns and concrete foundation footers
-      const supEvery = Math.max(4, Math.round(26 / ds));
-      const supMax = Math.floor(n / supEvery) + 2;
-      const sup = new THREE.InstancedMesh(new THREE.CylinderGeometry(1.2, 1.2, 1, 10), supMat, supMax);
-      sup.castShadow = true;
-      const footers = new THREE.InstancedMesh(new THREE.CylinderGeometry(2.4, 2.9, 2.6, 8), footerMat, supMax);
-      footers.receiveShadow = true;
-      let si = 0;
-      for (let i = 0; i < n && si < supMax; i += supEvery) {
+      // =========================================================================
+      // Custom Procedural Support Generator (Tubular, Wooden, Truss, Flanged)
+      // =========================================================================
+      const supDensity = supportConfig?.density ?? 'normal';
+      const supEvery =
+        supDensity === 'dense'
+          ? Math.max(2, Math.round(15 / ds))
+          : supDensity === 'sparse'
+            ? Math.max(5, Math.round(40 / ds))
+            : Math.max(3, Math.round(26 / ds));
+
+      let resolvedStyle: 'tubular' | 'wooden' | 'truss' | 'flanged' = 'tubular';
+      if (supportConfig?.style && supportConfig.style !== 'auto') {
+        resolvedStyle = supportConfig.style;
+      } else {
+        if (material === 'wood') {
+          resolvedStyle = 'wooden';
+        } else if (built.maxHeight - built.groundY > 75) {
+          resolvedStyle = 'truss';
+        } else {
+          resolvedStyle = 'tubular';
+        }
+      }
+      const useCrossBrace = supportConfig?.crossBracing !== false;
+
+      // Identify valid track coordinates for columns
+      const supIndices: number[] = [];
+      for (let i = 0; i < n; i += supEvery) {
         if (isJumpGap(i)) continue;
         const s = S[i];
-        if (s.py - G < 8) continue;
+        if (s.py - G < 7.5) continue;
         const nb = nbArr[i];
-        if (nb.y < 0.35) continue; // Skip columns through inverted loop portions
-        const hgt = s.py - G - 1.5;
-
-        // Support column
-        m4.compose(
-          new THREE.Vector3(s.px, G + hgt / 2, s.pz),
-          new THREE.Quaternion(),
-          new THREE.Vector3(1, hgt, 1),
-        );
-        sup.setMatrixAt(si, m4);
-
-        // Concrete footer at ground level
-        m4.compose(
-          new THREE.Vector3(s.px, G + 1.3, s.pz),
-          new THREE.Quaternion(),
-          new THREE.Vector3(1, 1, 1),
-        );
-        footers.setMatrixAt(si, m4);
-        si++;
+        if (nb.y < 0.32) continue; // Skip inverted loops where track runs overhead
+        supIndices.push(i);
       }
-      sup.count = si;
-      sup.instanceMatrix.needsUpdate = true;
-      footers.count = si;
-      footers.instanceMatrix.needsUpdate = true;
-      st.trackGroup.add(sup);
-      st.trackGroup.add(footers);
+
+      const numBents = supIndices.length;
+      // Preallocate instanced meshes with ample capacity for complex bents
+      const maxCols = Math.max(1, numBents * 4);
+      const maxFooters = Math.max(1, numBents * 4);
+      const maxBraces = Math.max(1, numBents * 18);
+      const maxLedgers = Math.max(1, numBents * 12);
+
+      const colMesh = new THREE.InstancedMesh(new THREE.CylinderGeometry(1, 1, 1, 12), supMat, maxCols);
+      colMesh.castShadow = true;
+      const footerMesh = new THREE.InstancedMesh(new THREE.CylinderGeometry(1, 1.25, 1, 8), footerMat, maxFooters);
+      footerMesh.receiveShadow = true;
+      const braceMesh = new THREE.InstancedMesh(new THREE.CylinderGeometry(1, 1, 1, 8), braceMat, maxBraces);
+      braceMesh.castShadow = true;
+      const ledgerMesh = new THREE.InstancedMesh(new THREE.CylinderGeometry(1, 1, 1, 8), braceMat, maxLedgers);
+      ledgerMesh.castShadow = true;
+
+      const pA = new THREE.Vector3();
+      const pB = new THREE.Vector3();
+      const pC = new THREE.Vector3();
+      const pD = new THREE.Vector3();
+      const sDir = new THREE.Vector3();
+      const sMid = new THREE.Vector3();
+      const sUp = new THREE.Vector3(0, 1, 0);
+      const sQ = new THREE.Quaternion();
+      const sScale = new THREE.Vector3();
+
+      const placeStrut = (p1: THREE.Vector3, p2: THREE.Vector3, radius: number, mesh: THREE.InstancedMesh, idx: number) => {
+        sDir.subVectors(p2, p1);
+        const len = sDir.length();
+        if (len < 0.01) return;
+        sMid.addVectors(p1, p2).multiplyScalar(0.5);
+        sDir.normalize();
+        sQ.setFromUnitVectors(sUp, sDir);
+        sScale.set(radius, len, radius);
+        m4.compose(sMid, sQ, sScale);
+        mesh.setMatrixAt(idx, m4);
+      };
+
+      let ci = 0;
+      let fi = 0;
+      let bi = 0;
+      let li = 0;
+
+      for (let b = 0; b < numBents; b++) {
+        const i = supIndices[b];
+        const s = S[i];
+        const nb = nbArr[i];
+        const rb = rbArr[i];
+        const T = new THREE.Vector3(built.tan[i * 3], built.tan[i * 3 + 1], built.tan[i * 3 + 2]);
+        const hgt = s.py - G - 1.2;
+
+        if (resolvedStyle === 'wooden') {
+          // Timber trestle: Dual battered wooden posts spaced along track normal/right
+          const topSpread = 3.2;
+          const batter = Math.min(6.0, hgt * 0.05);
+          const botSpread = topSpread + batter;
+
+          pA.set(s.px - botSpread * rb.x, G + 1.0, s.pz - botSpread * rb.z);
+          pB.set(s.px - topSpread * rb.x, s.py - 1.2, s.pz - topSpread * rb.z);
+          placeStrut(pA, pB, 0.72, colMesh, ci++);
+
+          pC.set(s.px + botSpread * rb.x, G + 1.0, s.pz + botSpread * rb.z);
+          pD.set(s.px + topSpread * rb.x, s.py - 1.2, s.pz + topSpread * rb.z);
+          placeStrut(pC, pD, 0.72, colMesh, ci++);
+
+          // Pier footers under each timber post
+          m4.compose(new THREE.Vector3(pA.x, G + 1.0, pA.z), new THREE.Quaternion(), new THREE.Vector3(1.8, 2.0, 1.8));
+          footerMesh.setMatrixAt(fi++, m4);
+          m4.compose(new THREE.Vector3(pC.x, G + 1.0, pC.z), new THREE.Quaternion(), new THREE.Vector3(1.8, 2.0, 1.8));
+          footerMesh.setMatrixAt(fi++, m4);
+
+          // Horizontal ledgers every 9-10 feet
+          const tiers = Math.max(1, Math.floor(hgt / 9.5));
+          for (let t = 1; t <= tiers; t++) {
+            const frac = t / (tiers + 1);
+            const lLeft = new THREE.Vector3().lerpVectors(pA, pB, frac);
+            const lRight = new THREE.Vector3().lerpVectors(pC, pD, frac);
+            placeStrut(lLeft, lRight, 0.55, ledgerMesh, li++);
+
+            // Diagonal X-bracing between tiers
+            if (useCrossBrace && t < tiers) {
+              const fracNext = (t + 1) / (tiers + 1);
+              const nLeft = new THREE.Vector3().lerpVectors(pA, pB, fracNext);
+              const nRight = new THREE.Vector3().lerpVectors(pC, pD, fracNext);
+              placeStrut(lLeft, nRight, 0.38, braceMesh, bi++);
+              placeStrut(lRight, nLeft, 0.38, braceMesh, bi++);
+            }
+          }
+        } else if (resolvedStyle === 'truss') {
+          // Quad-chord lattice box tower
+          const wTop = 2.4;
+          const wBot = wTop + Math.min(5.0, hgt * 0.04);
+          const topPts = [
+            new THREE.Vector3(s.px - wTop * rb.x - wTop * T.x, s.py - 1.2, s.pz - wTop * rb.z - wTop * T.z),
+            new THREE.Vector3(s.px + wTop * rb.x - wTop * T.x, s.py - 1.2, s.pz + wTop * rb.z - wTop * T.z),
+            new THREE.Vector3(s.px + wTop * rb.x + wTop * T.x, s.py - 1.2, s.pz + wTop * rb.z + wTop * T.z),
+            new THREE.Vector3(s.px - wTop * rb.x + wTop * T.x, s.py - 1.2, s.pz - wTop * rb.z + wTop * T.z),
+          ];
+          const botPts = [
+            new THREE.Vector3(s.px - wBot * rb.x - wBot * T.x, G + 1.2, s.pz - wBot * rb.z - wBot * T.z),
+            new THREE.Vector3(s.px + wBot * rb.x - wBot * T.x, G + 1.2, s.pz + wBot * rb.z - wBot * T.z),
+            new THREE.Vector3(s.px + wBot * rb.x + wBot * T.x, G + 1.2, s.pz + wBot * rb.z + wBot * T.z),
+            new THREE.Vector3(s.px - wBot * rb.x + wBot * T.x, G + 1.2, s.pz - wBot * rb.z + wBot * T.z),
+          ];
+
+          for (let k = 0; k < 4; k++) {
+            placeStrut(botPts[k], topPts[k], 0.62, colMesh, ci++);
+          }
+
+          // Monolithic foundation block
+          m4.compose(new THREE.Vector3(s.px, G + 1.2, s.pz), new THREE.Quaternion(), new THREE.Vector3(wBot * 1.8, 2.4, wBot * 1.8));
+          footerMesh.setMatrixAt(fi++, m4);
+
+          // Horizontal perimeter collars & diagonal lacing
+          const tiers = Math.max(1, Math.floor(hgt / 12));
+          for (let t = 1; t <= tiers; t++) {
+            const f1 = t / (tiers + 1);
+            const rPts = [
+              new THREE.Vector3().lerpVectors(botPts[0], topPts[0], f1),
+              new THREE.Vector3().lerpVectors(botPts[1], topPts[1], f1),
+              new THREE.Vector3().lerpVectors(botPts[2], topPts[2], f1),
+              new THREE.Vector3().lerpVectors(botPts[3], topPts[3], f1),
+            ];
+            placeStrut(rPts[0], rPts[1], 0.42, ledgerMesh, li++);
+            placeStrut(rPts[1], rPts[2], 0.42, ledgerMesh, li++);
+            placeStrut(rPts[2], rPts[3], 0.42, ledgerMesh, li++);
+            placeStrut(rPts[3], rPts[0], 0.42, ledgerMesh, li++);
+
+            if (useCrossBrace && t < tiers) {
+              const f2 = (t + 1) / (tiers + 1);
+              const nPts = [
+                new THREE.Vector3().lerpVectors(botPts[0], topPts[0], f2),
+                new THREE.Vector3().lerpVectors(botPts[1], topPts[1], f2),
+                new THREE.Vector3().lerpVectors(botPts[2], topPts[2], f2),
+                new THREE.Vector3().lerpVectors(botPts[3], topPts[3], f2),
+              ];
+              placeStrut(rPts[0], nPts[1], 0.32, braceMesh, bi++);
+              placeStrut(rPts[1], nPts[2], 0.32, braceMesh, bi++);
+              placeStrut(rPts[2], nPts[3], 0.32, braceMesh, bi++);
+              placeStrut(rPts[3], nPts[0], 0.32, braceMesh, bi++);
+            }
+          }
+        } else if (resolvedStyle === 'flanged') {
+          // Heavy steel column with bolted structural collar discs
+          pA.set(s.px, G + 1.2, s.pz);
+          pB.set(s.px, s.py - 1.2, s.pz);
+          placeStrut(pA, pB, 1.35, colMesh, ci++);
+
+          m4.compose(new THREE.Vector3(s.px, G + 1.4, s.pz), new THREE.Quaternion(), new THREE.Vector3(3.4, 2.8, 3.4));
+          footerMesh.setMatrixAt(fi++, m4);
+
+          // Structural flange discs
+          const tiers = Math.max(1, Math.floor(hgt / 12));
+          for (let t = 1; t <= tiers; t++) {
+            const yDisc = G + (t * (hgt / (tiers + 1)));
+            m4.compose(new THREE.Vector3(s.px, yDisc, s.pz), new THREE.Quaternion(), new THREE.Vector3(2.5, 0.7, 2.5));
+            ledgerMesh.setMatrixAt(li++, m4);
+          }
+        } else {
+          // Tubular Steel Default: Central column + A-frame outriggers on tall sections
+          pA.set(s.px, G + 1.2, s.pz);
+          pB.set(s.px, s.py - 1.2, s.pz);
+          placeStrut(pA, pB, 1.15, colMesh, ci++);
+
+          m4.compose(new THREE.Vector3(s.px, G + 1.2, s.pz), new THREE.Quaternion(), new THREE.Vector3(2.6, 2.4, 2.6));
+          footerMesh.setMatrixAt(fi++, m4);
+
+          if (hgt > 22) {
+            const spread = Math.min(26, hgt * 0.22);
+            const apexY = G + hgt * 0.72;
+            const apex = new THREE.Vector3(s.px, apexY, s.pz);
+            const leg1Bot = new THREE.Vector3(s.px + spread * rb.x, G + 1.0, s.pz + spread * rb.z);
+            const leg2Bot = new THREE.Vector3(s.px - spread * rb.x, G + 1.0, s.pz - spread * rb.z);
+
+            placeStrut(leg1Bot, apex, 0.78, braceMesh, bi++);
+            placeStrut(leg2Bot, apex, 0.78, braceMesh, bi++);
+
+            m4.compose(new THREE.Vector3(leg1Bot.x, G + 1.0, leg1Bot.z), new THREE.Quaternion(), new THREE.Vector3(1.9, 2.0, 1.9));
+            footerMesh.setMatrixAt(fi++, m4);
+            m4.compose(new THREE.Vector3(leg2Bot.x, G + 1.0, leg2Bot.z), new THREE.Quaternion(), new THREE.Vector3(1.9, 2.0, 1.9));
+            footerMesh.setMatrixAt(fi++, m4);
+
+            if (useCrossBrace) {
+              const strutY = G + hgt * 0.35;
+              const s1 = new THREE.Vector3().lerpVectors(leg1Bot, apex, (strutY - G) / (apexY - G));
+              const s2 = new THREE.Vector3().lerpVectors(leg2Bot, apex, (strutY - G) / (apexY - G));
+              placeStrut(s1, s2, 0.45, ledgerMesh, li++);
+            }
+          }
+        }
+      }
+
+      colMesh.count = ci;
+      colMesh.instanceMatrix.needsUpdate = true;
+      st.trackGroup.add(colMesh);
+
+      footerMesh.count = fi;
+      footerMesh.instanceMatrix.needsUpdate = true;
+      st.trackGroup.add(footerMesh);
+
+      if (bi > 0) {
+        braceMesh.count = bi;
+        braceMesh.instanceMatrix.needsUpdate = true;
+        st.trackGroup.add(braceMesh);
+      }
+
+      if (li > 0) {
+        ledgerMesh.count = li;
+        ledgerMesh.instanceMatrix.needsUpdate = true;
+        st.trackGroup.add(ledgerMesh);
+      }
 
       // Mid-Air Jump Launch Ramp Lip, Catch Receiving Hopper & Flight Guide
       for (let pIdx = 0; pIdx < built.pieceRanges.length; pIdx++) {
@@ -1249,7 +1479,7 @@ export default function Ride3D({
       cam.updateProjectionMatrix();
     }, 70);
     return () => window.clearTimeout(timer);
-  }, [built, theme, material]);
+  }, [built, theme, material, supportConfig]);
 
   // ------------------------------------------------------------- frame loop
   useEffect(() => {

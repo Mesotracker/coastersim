@@ -14,7 +14,7 @@ import {
   Activity,
 } from 'lucide-react';
 import Editor2D from './components/Editor2D';
-import Ride3D, { CamMode, WeatherType } from './components/Ride3D';
+import Ride3D, { CamMode, WeatherType, SupportConfig } from './components/Ride3D';
 import Toolbar from './components/Toolbar';
 import Inspector from './components/Inspector';
 import HUD, { HudData } from './components/HUD';
@@ -42,6 +42,7 @@ import {
   precomputeFullRideTelemetry,
 } from './lib/physics';
 import { THEMES, Theme } from './lib/themes';
+import { audioEngine } from './lib/audio';
 
 type Tab = 'piece' | 'physics' | 'telemetry' | 'style';
 type LayoutMode = 'balanced' | 'wide-ride' | 'focus-designer';
@@ -125,6 +126,26 @@ export default function App() {
   const [importExportMode, setImportExportMode] = useState<'export' | 'import'>('export');
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
+  // Custom Procedural Support Structure Configuration
+  const [supportConfig, setSupportConfig] = useState<SupportConfig>({
+    style: 'tubular',
+    density: 'medium',
+    crossBracing: true,
+  });
+
+  // Initialize Web Audio synthesizer on first user interaction
+  useEffect(() => {
+    const handleFirstInteraction = () => {
+      audioEngine.init();
+    };
+    window.addEventListener('pointerdown', handleFirstInteraction, { once: true });
+    window.addEventListener('keydown', handleFirstInteraction, { once: true });
+    return () => {
+      window.removeEventListener('pointerdown', handleFirstInteraction);
+      window.removeEventListener('keydown', handleFirstInteraction);
+    };
+  }, []);
+
   const showToast = useCallback((msg: string) => {
     setToastMessage(msg);
     setTimeout(() => {
@@ -194,6 +215,10 @@ export default function App() {
       const dt = Math.min(0.05, ((now - last) / 1000) * simSpeedRef.current);
       last = now;
       if (playingRef.current) stepSim(simRef.current, builtRef.current, dt, cfgRef.current);
+
+      // Procedural audio engine dynamic acoustic synthesis update
+      audioEngine.update(simRef.current, builtRef.current, cfgRef.current, playingRef.current);
+
       acc += dt;
       if (acc > 0.033) {
         acc = 0;
@@ -221,7 +246,10 @@ export default function App() {
       }
     };
     raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
+    return () => {
+      cancelAnimationFrame(raf);
+      audioEngine.stop();
+    };
   }, []);
 
   // ------------------------------------------------------------ track edits
@@ -1030,6 +1058,73 @@ export default function App() {
                       </label>
                     ))}
                   </div>
+
+                  {/* Procedural Track Supports Generator */}
+                  <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-3 space-y-2.5">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold uppercase tracking-wider text-slate-700">
+                        Custom Track Supports Generator
+                      </span>
+                      <label className="flex cursor-pointer items-center gap-1.5 text-xs font-semibold text-slate-600">
+                        <input
+                          type="checkbox"
+                          checked={supportConfig.crossBracing}
+                          onChange={(e) =>
+                            setSupportConfig((prev) => ({ ...prev, crossBracing: e.target.checked }))
+                          }
+                          className="h-3.5 w-3.5 accent-blue-600 rounded cursor-pointer"
+                        />
+                        <span>Cross Bracing</span>
+                      </label>
+                    </div>
+
+                    {/* Support Style selection */}
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
+                      {(
+                        [
+                          { id: 'tubular', name: 'Tubular', icon: '⚪' },
+                          { id: 'wooden', name: 'Wooden Bents', icon: '🪵' },
+                          { id: 'truss', name: 'Steel Truss', icon: '📐' },
+                          { id: 'flanged', name: 'Flanged Pylon', icon: '🏗️' },
+                        ] as const
+                      ).map((st) => (
+                        <button
+                          key={st.id}
+                          onClick={() => setSupportConfig((prev) => ({ ...prev, style: st.id }))}
+                          className={`flex items-center justify-center gap-1.5 rounded-lg py-1.5 px-2 text-xs font-bold transition border ${
+                            supportConfig.style === st.id
+                              ? 'border-blue-500 bg-blue-50 text-blue-700 shadow-xs'
+                              : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
+                          }`}
+                        >
+                          <span>{st.icon}</span>
+                          <span>{st.name}</span>
+                        </button>
+                      ))}
+                    </div>
+
+                    {/* Support Density selection */}
+                    <div className="flex items-center justify-between gap-2 pt-1 border-t border-slate-200/60">
+                      <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">
+                        Bent Spacing
+                      </span>
+                      <div className="flex gap-1">
+                        {(['sparse', 'medium', 'dense'] as const).map((d) => (
+                          <button
+                            key={d}
+                            onClick={() => setSupportConfig((prev) => ({ ...prev, density: d }))}
+                            className={`rounded-md px-2.5 py-1 text-[11px] font-bold capitalize transition ${
+                              supportConfig.density === d
+                                ? 'bg-blue-600 text-white shadow-xs'
+                                : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
+                            }`}
+                          >
+                            {d}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
                 </div>
               )}
             </div>
@@ -1055,6 +1150,7 @@ export default function App() {
               camMode={camMode}
               weather={weather}
               aerialFollow={aerialFollow}
+              supportConfig={supportConfig}
             />
             <HUD
               hud={hud}
