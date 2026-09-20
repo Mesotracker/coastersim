@@ -12,12 +12,12 @@ export interface SimSettings {
 
 export const DEFAULT_SETTINGS: SimSettings = {
   gravity: 1,
-  friction: 0.008,
-  drag: 0.0006,
-  liftSpeed: 10,
-  launch: 8,
-  brakeForce: 9,
-  boostForce: 16,
+  friction: 0.0035, // realistic steel wheels on tubular rails (polyurethane tread)
+  drag: 0.00035, // realistic aerodynamic drag profile for train
+  liftSpeed: 6, // ~13.4 mph chain lift speed
+  launch: 9, // ~20.1 mph station dispatch drive
+  brakeForce: 8.5, // ~0.87 G deceleration
+  boostForce: 18, // ~1.84 G linear induction motor boost
 };
 
 export type Phase = 'station' | 'riding' | 'finished';
@@ -113,66 +113,116 @@ export function stepSim(st: SimState, track: BuiltTrack, dt: number, cfg: SimSet
     st.timer += dt;
     st.s = 0;
     st.v = 0;
-    if (st.timer > 1.0) {
+    if (st.timer > 0.8) {
       st.phase = 'riding';
       st.timer = 0;
       st.runTime = 0;
       st.airtime = 0;
       st.maxSpeed = 0;
       st.maxG = 1;
-      st.v = Math.max(1, cfg.launch);
+      st.v = 1.5; // Initial station rollout
       st.telemetry = [];
       st.lastTelemetryT = 0;
-      setEvent(st, 'Dispatch!', 1.1);
+      setEvent(st, 'Dispatch!', 1.2);
     }
     frameAt(track, 0, f);
     st.height = (f.y - track.groundY) * FEET_PER_UNIT;
     st.speed = 0;
     st.g = 1;
+    st.lat = 0;
     return;
   }
 
   if (st.phase === 'finished') {
     st.timer += dt;
-    st.v *= Math.max(0, 1 - dt * 2.4);
+    st.v *= Math.max(0, 1 - dt * 2.8);
     st.speed = Math.abs(st.v) * MPH_PER_MPS;
-    if (st.timer > 2.2) {
+    if (st.timer > 2.0) {
       st.laps += 1;
       resetSim(st);
     }
     return;
   }
 
-  // ---- riding physics -----------------------------------------------------
-  const sub = Math.max(1, Math.min(16, Math.ceil(dt / (1 / 240))));
+  // ---- riding physics with 240Hz sub-stepping & midpoint integration --------
+  // Fixed sub-step for rock-solid stability and deterministic clock timing
+  const sub = Math.max(1, Math.min(24, Math.ceil(dt / (1 / 240))));
   const h = dt / sub;
-  for (let i = 0; i < sub; i++) {
-    frameAt(track, st.s, f);
+
+  // Helper to compute acceleration at distance s with velocity v
+  const calcAccel = (posS: number, velV: number): number => {
+    frameAt(track, posS, f);
     const sinP = Math.sin(f.pitch);
     const cosP = Math.cos(f.pitch);
 
-    let a = -g * sinP;
-    a -= cfg.drag * st.v * Math.abs(st.v);
-    if (Math.abs(st.v) > 0.05) {
-      a -= cfg.friction * g * Math.abs(cosP) * Math.sign(st.v);
+    // Gravity along track tangent: +pitch = climbing, so -g*sin(pitch)
+    let accel = -g * sinP;
+
+    // Aerodynamic quadratic drag: a_drag = -C_drag * v * |v|
+    accel -= cfg.drag * velV * Math.abs(velV);
+
+    // Centripetal acceleration in vertical and lateral directions (m/s^2)
+    const kappaM = f.kappa / METERS_PER_UNIT;
+    const yawRateM = f.yawRate / METERS_PER_UNIT;
+    const vv = velV * velV;
+    const aNormVert = g * cosP + vv * kappaM;
+    const aNormLat = vv * yawRateM;
+
+    // Total wheel contact load on running, guide, and upstop wheels:
+    const aNormTotal = Math.sqrt(aNormVert * aNormVert + aNormLat * aNormLat);
+
+    // Rolling resistance: wheel bearing & polyurethane compression
+    if (Math.abs(velV) > 0.04) {
+      // Minimum normal force ensures realistic coasting even at zero-G crest
+      const effLoad = Math.max(g * 0.2, aNormTotal);
+      accel -= cfg.friction * effLoad * Math.sign(velV);
     }
 
+    // Special track sections
     if (f.special === 1) {
-      // trim brakes
-      const target = 6;
-      if (st.v > target) a -= cfg.brakeForce;
-    } else if (f.special === 2 && st.v > -0.5) {
-      if (st.v < 45) a += cfg.boostForce;
+      // Trim brakes: magnetic eddy-current or friction calipers
+      const targetBrakeSpeed = 5.5; // m/s (~12 mph)
+      if (velV > targetBrakeSpeed) {
+        accel -= cfg.brakeForce;
+      }
+    } else if (f.special === 2 && velV > -0.5) {
+      // Linear induction motor (LSM) launch thrust
+      if (velV < 50) {
+        accel += cfg.boostForce;
+      }
     }
 
-    // chain lift / station launch section
-    if (st.s < track.liftEnd && st.v < cfg.liftSpeed) {
-      st.v = cfg.liftSpeed;
-      a = Math.max(a, 0);
+    // Station dispatch drive tire kicker zone
+    if (posS < STATION_LEN * 0.75 && velV < cfg.launch) {
+      accel += Math.max(0, (cfg.launch - velV) * 3.8);
     }
 
-    st.v += a * h;
-    st.v = Math.max(-45, Math.min(65, st.v));
+    // Mechanical chain lift hill
+    if (posS < track.liftEnd) {
+      if (velV < cfg.liftSpeed) {
+        // Motor dog engagement pushes train steadily up the incline
+        accel = Math.max(accel, (cfg.liftSpeed - velV) * 4.5);
+      }
+    }
+
+    return accel;
+  };
+
+  for (let i = 0; i < sub; i++) {
+    // 2nd-order Runge-Kutta / Midpoint Integration
+    const a1 = calcAccel(st.s, st.v);
+    const midS = Math.max(0, Math.min(track.length, st.s + (0.5 * st.v * h) / METERS_PER_UNIT));
+    const midV = st.v + 0.5 * a1 * h;
+    const a2 = calcAccel(midS, midV);
+
+    // Chain lift clamping (train cannot slip backwards through anti-rollbacks)
+    if (st.s < track.liftEnd && st.v < cfg.liftSpeed && a2 < 0) {
+      st.v = Math.min(cfg.liftSpeed, st.v + 8 * h);
+    } else {
+      st.v += a2 * h;
+    }
+
+    st.v = Math.max(-45, Math.min(75, st.v));
     st.s += (st.v * h) / METERS_PER_UNIT;
 
     if (st.s <= 0) {
@@ -180,12 +230,13 @@ export function stepSim(st: SimState, track: BuiltTrack, dt: number, cfg: SimSet
       if (st.v < -0.5) {
         setEvent(st, 'Rolled back — needs more speed', 2.4);
         st.phase = 'station';
-        st.timer = -0.6;
+        st.timer = -0.5;
         st.v = 0;
         return;
       }
-      st.v = Math.max(st.v, 0.5);
+      st.v = Math.max(st.v, 0.8);
     }
+
     if (st.s >= track.length) {
       st.s = track.length;
       st.phase = 'finished';
@@ -197,9 +248,21 @@ export function stepSim(st: SimState, track: BuiltTrack, dt: number, cfg: SimSet
 
   st.runTime += dt;
   frameAt(track, st.s, f);
+
+  // Exact passenger G-force in the car's local banked frame
+  const kappaM = f.kappa / METERS_PER_UNIT;
+  const yawRateM = f.yawRate / METERS_PER_UNIT;
   const vv = st.v * st.v;
-  st.g = Math.cos(f.pitch) + (vv * f.kappa) / (METERS_PER_UNIT * g);
-  st.lat = (vv * f.yawRate) / (METERS_PER_UNIT * g);
+  const aNormVert = g * Math.cos(f.pitch) + vv * kappaM;
+  const aNormLat = vv * yawRateM;
+
+  // Passenger seat coordinates: +G pushes into seat; lateral G pushes sideways
+  const bank = f.bank;
+  const cosB = Math.cos(bank);
+  const sinB = Math.sin(bank);
+  st.g = (aNormVert * cosB + aNormLat * sinB) / g;
+  st.lat = (aNormLat * cosB - aNormVert * sinB) / g;
+
   // Imperial speed in mph
   st.speed = Math.abs(st.v) * MPH_PER_MPS;
   // Imperial height in feet
@@ -207,12 +270,16 @@ export function stepSim(st: SimState, track: BuiltTrack, dt: number, cfg: SimSet
 
   if (st.speed > st.maxSpeed) st.maxSpeed = st.speed;
   if (st.g > st.maxG) st.maxG = st.g;
-  if (st.g < 0.25 && st.phase === 'riding') {
+
+  // Airtime detection (< 0.2G)
+  if (st.g < 0.2 && st.phase === 'riding') {
     st.airtime += dt;
-    if (st.eventT <= 0 && st.g < 0.05 && st.speed > 18) setEvent(st, 'AIRTIME!', 0.9);
+    if (st.eventT <= 0 && st.g < 0.05 && st.speed > 16) {
+      setEvent(st, 'AIRTIME!', 0.9);
+    }
   }
 
-  // Record telemetry point for the speed graph over time (every ~0.08 seconds)
+  // Record telemetry point for the speed graph over time (smooth ~12 Hz sampling)
   if (st.phase === 'riding' && st.runTime - st.lastTelemetryT >= 0.08) {
     st.lastTelemetryT = st.runTime;
     st.telemetry.push({
@@ -222,7 +289,6 @@ export function stepSim(st: SimState, track: BuiltTrack, dt: number, cfg: SimSet
       height: Math.round(st.height),
       s: Math.round(st.s),
     });
-    // Keep reasonable history buffer (e.g. up to 1500 points = ~2 minutes of ride)
     if (st.telemetry.length > 1500) st.telemetry.shift();
   }
 
@@ -240,6 +306,9 @@ export function stepSim(st: SimState, track: BuiltTrack, dt: number, cfg: SimSet
     st.timer = 0;
   }
 
-  const target = Math.max(0, (st.speed - 30) / 60) + Math.max(0, Math.abs(st.g) - 2.2) * 0.12;
-  st.shake += (Math.min(1, target) - st.shake) * Math.min(1, dt * 4);
+  // High-frequency harmonic vibration intensity (realistic rail chatter at high speed & load)
+  const speedRatio = Math.max(0, (st.speed - 25) / 55);
+  const gRatio = Math.max(0, Math.abs(st.g - 1) - 1.2) * 0.15;
+  const targetShake = Math.min(1, speedRatio * 0.85 + gRatio);
+  st.shake += (targetShake - st.shake) * Math.min(1, dt * 5);
 }

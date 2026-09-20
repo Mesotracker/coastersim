@@ -41,27 +41,43 @@ function mulberry(seed: number) {
 
 function groundTexture() {
   const c = document.createElement('canvas');
-  c.width = c.height = 128;
+  c.width = c.height = 256;
   const g = c.getContext('2d')!;
-  g.fillStyle = '#6ec25a';
-  g.fillRect(0, 0, 128, 128);
-  const rnd = mulberry(7);
-  for (let i = 0; i < 260; i++) {
-    const x = rnd() * 128;
-    const y = rnd() * 128;
-    const r = 2 + rnd() * 7;
-    g.fillStyle = rnd() > 0.5 ? 'rgba(96,180,74,0.55)' : 'rgba(132,204,102,0.55)';
+  g.fillStyle = '#4c8738';
+  g.fillRect(0, 0, 256, 256);
+  const rnd = mulberry(101);
+  // Realistic grassy field variation with fine noise
+  for (let i = 0; i < 750; i++) {
+    const x = rnd() * 256;
+    const y = rnd() * 256;
+    const r = 1.2 + rnd() * 5.5;
+    const val = rnd();
+    g.fillStyle =
+      val < 0.38
+        ? 'rgba(56,108,40,0.65)'
+        : val < 0.72
+          ? 'rgba(88,155,62,0.60)'
+          : 'rgba(118,178,76,0.50)';
     g.beginPath();
     g.arc(x, y, r, 0, Math.PI * 2);
     g.fill();
   }
-  g.strokeStyle = 'rgba(70,150,60,0.35)';
-  g.lineWidth = 2;
-  g.strokeRect(0, 0, 128, 128);
+  // Fine grass blades and soil variation
+  g.strokeStyle = 'rgba(132,196,96,0.45)';
+  g.lineWidth = 1.4;
+  for (let i = 0; i < 160; i++) {
+    const x = rnd() * 256;
+    const y = rnd() * 256;
+    g.beginPath();
+    g.moveTo(x, y);
+    g.lineTo(x + (rnd() - 0.5) * 5, y - 3 - rnd() * 5);
+    g.stroke();
+  }
   const tex = new THREE.CanvasTexture(c);
   tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-  tex.repeat.set(220, 220);
-  tex.anisotropy = 4;
+  tex.repeat.set(160, 160);
+  tex.anisotropy = 8;
+  tex.colorSpace = THREE.SRGBColorSpace;
   return tex;
 }
 
@@ -77,7 +93,7 @@ export default function Ride3D({ built, simRef, theme, camMode }: Props) {
     sun: THREE.DirectionalLight;
     cockpit: THREE.Group;
     cars: THREE.Group[];
-    carMat: THREE.MeshLambertMaterial;
+    carMat: THREE.MeshStandardMaterial;
     camPos: THREE.Vector3;
     camQuat: THREE.Quaternion;
     fov: number;
@@ -92,6 +108,9 @@ export default function Ride3D({ built, simRef, theme, camMode }: Props) {
     const wrap = wrapRef.current!;
     const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
     renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.08;
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     renderer.setSize(wrap.clientWidth || 600, wrap.clientHeight || 400);
@@ -101,28 +120,28 @@ export default function Ride3D({ built, simRef, theme, camMode }: Props) {
     wrap.appendChild(renderer.domElement);
 
     const scene = new THREE.Scene();
-    scene.fog = new THREE.Fog(0xcfe8ff, 700, 3400);
+    scene.fog = new THREE.Fog(0xcfe8ff, 650, 3600);
 
     const camera = new THREE.PerspectiveCamera(66, 1, 0.4, 9000);
     camera.position.set(0, 40, 120);
 
-    // Sky dome
+    // Sky dome with realistic atmospheric gradation
     const skyMat = new THREE.ShaderMaterial({
       side: THREE.BackSide,
       depthWrite: false,
       fog: false,
       uniforms: {
-        top: { value: new THREE.Color('#2f7fe0') },
-        mid: { value: new THREE.Color('#8ec6f7') },
-        bottom: { value: new THREE.Color('#e8f4ff') },
+        top: { value: new THREE.Color('#1e6fd8') },
+        mid: { value: new THREE.Color('#85bff5') },
+        bottom: { value: new THREE.Color('#e0f0fe') },
       },
       vertexShader: `varying vec3 vP; void main(){ vP = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0);} `,
       fragmentShader: `
         uniform vec3 top; uniform vec3 mid; uniform vec3 bottom; varying vec3 vP;
         void main(){
           float h = normalize(vP).y;
-          vec3 c = mix(bottom, mid, smoothstep(-0.05, 0.28, h));
-          c = mix(c, top, smoothstep(0.25, 0.85, h));
+          vec3 c = mix(bottom, mid, smoothstep(-0.04, 0.32, h));
+          c = mix(c, top, smoothstep(0.28, 0.90, h));
           gl_FragColor = vec4(c, 1.0);
         }`,
     });
@@ -131,20 +150,29 @@ export default function Ride3D({ built, simRef, theme, camMode }: Props) {
     scene.add(sky);
 
     // Lights
-    const hemi = new THREE.HemisphereLight(0xdcefff, 0x6aa84f, 1.05);
+    const hemi = new THREE.HemisphereLight(0xcfe6fe, 0x274314, 1.15);
     scene.add(hemi);
-    const sun = new THREE.DirectionalLight(0xfff6e0, 1.5);
+    const sun = new THREE.DirectionalLight(0xfffaee, 2.2);
     sun.position.set(360, 620, 240);
     sun.castShadow = true;
     sun.shadow.mapSize.set(2048, 2048);
-    sun.shadow.bias = -0.0009;
+    sun.shadow.bias = -0.0006;
     scene.add(sun);
     scene.add(sun.target);
 
-    // Ground plane
+    // Directional rim/fill light to give specular highlights to shadowed tracks
+    const fillLight = new THREE.DirectionalLight(0x93c5fd, 0.65);
+    fillLight.position.set(-300, 400, -260);
+    scene.add(fillLight);
+
+    // Ground plane with PBR Standard Material
     const ground = new THREE.Mesh(
       new THREE.PlaneGeometry(9000, 9000),
-      new THREE.MeshLambertMaterial({ map: groundTexture() }),
+      new THREE.MeshStandardMaterial({
+        map: groundTexture(),
+        roughness: 0.88,
+        metalness: 0.04,
+      }),
     );
     ground.rotation.x = -Math.PI / 2;
     ground.receiveShadow = true;
@@ -155,52 +183,142 @@ export default function Ride3D({ built, simRef, theme, camMode }: Props) {
     const sceneryGroup = new THREE.Group();
     scene.add(sceneryGroup);
 
-    // Train cars
-    const carMat = new THREE.MeshLambertMaterial({ color: 0xfacc15 });
-    const darkMat = new THREE.MeshLambertMaterial({ color: 0x1f2937 });
+    // Train cars - High-fidelity PBR Coaster Train
+    const carMat = new THREE.MeshStandardMaterial({
+      color: 0xfacc15,
+      roughness: 0.20,
+      metalness: 0.32,
+    });
+    const chassisMat = new THREE.MeshStandardMaterial({
+      color: 0x0f172a,
+      roughness: 0.28,
+      metalness: 0.85,
+    });
+    const seatMat = new THREE.MeshStandardMaterial({
+      color: 0x18181b,
+      roughness: 0.82,
+      metalness: 0.08,
+    });
+    const chromeMat = new THREE.MeshStandardMaterial({
+      color: 0xf1f5f9,
+      roughness: 0.12,
+      metalness: 0.95,
+    });
+    const wheelMat = new THREE.MeshStandardMaterial({
+      color: 0x334155,
+      roughness: 0.35,
+      metalness: 0.80,
+    });
+
     const cars: THREE.Group[] = [];
     for (let i = 0; i < 3; i++) {
       const c = new THREE.Group();
-      const body = new THREE.Mesh(new THREE.BoxGeometry(7.4, 3.2, 11.5), i === 0 ? carMat : darkMat);
+
+      // Steel undercarriage / chassis
+      const chassis = new THREE.Mesh(new THREE.BoxGeometry(7.2, 0.8, 11.2), chassisMat);
+      chassis.position.y = -0.5;
+      chassis.castShadow = true;
+      c.add(chassis);
+
+      // Running wheels & guide wheels on rail bogies
+      for (const side of [-3.1, 3.1]) {
+        for (const end of [-4.2, 4.2]) {
+          const wheel = new THREE.Mesh(new THREE.CylinderGeometry(0.7, 0.7, 0.45, 12), wheelMat);
+          wheel.rotation.z = Math.PI / 2;
+          wheel.position.set(side, -1.0, end);
+          c.add(wheel);
+        }
+      }
+
+      // Fiberglass aerodynamic shell
+      const body = new THREE.Mesh(new THREE.BoxGeometry(7.4, 2.6, 11.2), i === 0 ? carMat : chassisMat);
+      body.position.y = 0.9;
       body.castShadow = true;
       c.add(body);
-      for (const z of [3.1, -3.1]) {
-        const seat = new THREE.Mesh(new THREE.BoxGeometry(6.6, 2.4, 1.4), darkMat);
-        seat.position.set(0, 2.4, z);
+
+      // Side trim accents
+      const trim = new THREE.Mesh(new THREE.BoxGeometry(7.6, 0.35, 11.4), chromeMat);
+      trim.position.y = 1.3;
+      c.add(trim);
+
+      // Dual bucket seats (front row and back row)
+      for (const z of [2.8, -2.8]) {
+        // Seat cushion and backrest
+        const seat = new THREE.Mesh(new THREE.BoxGeometry(6.4, 2.6, 1.3), seatMat);
+        seat.position.set(0, 2.5, z);
         seat.castShadow = true;
         c.add(seat);
+
+        // Headrest pads
+        for (const x of [-1.8, 1.8]) {
+          const headrest = new THREE.Mesh(new THREE.BoxGeometry(1.5, 1.2, 0.9), seatMat);
+          headrest.position.set(x, 4.0, z);
+          headrest.castShadow = true;
+          c.add(headrest);
+        }
+
+        // Chrome lap bar restraint
+        const bar = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.18, 5.4, 8), chromeMat);
+        bar.rotation.z = Math.PI / 2;
+        bar.position.set(0, 2.8, z - 1.1);
+        c.add(bar);
       }
+
+      // Front car features: sculpted nosecone, emblem, and headlights
       if (i === 0) {
-        const nosecone = new THREE.Mesh(new THREE.ConeGeometry(3.3, 5, 6), carMat);
+        const nosecone = new THREE.Mesh(new THREE.ConeGeometry(3.3, 5.2, 6), carMat);
         nosecone.rotation.x = -Math.PI / 2;
-        nosecone.position.set(0, 0, -7.5);
+        nosecone.position.set(0, 0.8, -7.6);
+        nosecone.castShadow = true;
         c.add(nosecone);
+
+        // Chrome front intake grill
+        const grill = new THREE.Mesh(new THREE.BoxGeometry(3.8, 0.9, 0.6), chromeMat);
+        grill.position.set(0, 0.5, -9.2);
+        c.add(grill);
+
+        // Dual headlights
+        const lightMat = new THREE.MeshStandardMaterial({
+          color: 0xffffff,
+          emissive: 0xfef08a,
+          emissiveIntensity: 0.9,
+          roughness: 0.1,
+        });
+        for (const lx of [-1.5, 1.5]) {
+          const lamp = new THREE.Mesh(new THREE.SphereGeometry(0.35, 10, 8), lightMat);
+          lamp.position.set(lx, 1.2, -8.6);
+          c.add(lamp);
+        }
       }
+
       scene.add(c);
       cars.push(c);
     }
 
-    // Cockpit for POV camera
+    // Cockpit for POV camera (first-person view)
     const cockpit = new THREE.Group();
-    const bodyMat = new THREE.MeshLambertMaterial({ color: 0x1f2937 });
-    const nose = new THREE.Mesh(new THREE.BoxGeometry(7.2, 2.0, 7), bodyMat);
+    const hoodMat = carMat; // Matches the lead car finish
+    const nose = new THREE.Mesh(new THREE.BoxGeometry(7.2, 2.2, 7.5), hoodMat);
     nose.position.set(0, -3.1, -4.2);
     cockpit.add(nose);
-    const accentMat = new THREE.MeshLambertMaterial({ color: 0xfacc15 });
-    const lip = new THREE.Mesh(new THREE.BoxGeometry(7.4, 0.55, 1.1), accentMat);
-    lip.position.set(0, -2.2, -7.1);
+
+    const lip = new THREE.Mesh(new THREE.BoxGeometry(7.5, 0.6, 1.2), chromeMat);
+    lip.position.set(0, -2.1, -7.4);
     cockpit.add(lip);
-    const barMat = new THREE.MeshLambertMaterial({ color: 0x334155 });
-    const bar = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.28, 5.4, 8), barMat);
+
+    // Front chrome safety handlebar with rubber grips
+    const bar = new THREE.Mesh(new THREE.CylinderGeometry(0.24, 0.24, 5.4, 8), chromeMat);
     bar.rotation.z = Math.PI / 2;
-    bar.position.set(0, -1.6, -2.6);
+    bar.position.set(0, -1.5, -2.8);
     cockpit.add(bar);
-    const post1 = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.22, 2.2, 6), barMat);
-    post1.position.set(-2.6, -2.5, -2.6);
+
+    const post1 = new THREE.Mesh(new THREE.CylinderGeometry(0.20, 0.20, 2.2, 6), chromeMat);
+    post1.position.set(-2.5, -2.5, -2.8);
     cockpit.add(post1);
     const post2 = post1.clone();
-    post2.position.x = 2.6;
+    post2.position.x = 2.5;
     cockpit.add(post2);
+
     camera.add(cockpit);
     scene.add(camera);
 
@@ -293,19 +411,53 @@ export default function Ride3D({ built, simRef, theme, camMode }: Props) {
         spine.push(new THREE.Vector3().copy(P).addScaledVector(nb, -1.9));
       }
 
-      const railMat = new THREE.MeshLambertMaterial({ color: new THREE.Color(theme.rail) });
-      const spineMat = new THREE.MeshLambertMaterial({ color: new THREE.Color(theme.spine) });
-      const tieMat = new THREE.MeshLambertMaterial({ color: new THREE.Color(theme.tie) });
-      const supMat = new THREE.MeshLambertMaterial({ color: new THREE.Color(theme.support) });
+      // PBR Track Materials with metallic tubular sheen
+      const railMat = new THREE.MeshStandardMaterial({
+        color: new THREE.Color(theme.rail),
+        roughness: 0.20,
+        metalness: 0.82,
+        envMapIntensity: 1.25,
+      });
+      const spineMat = new THREE.MeshStandardMaterial({
+        color: new THREE.Color(theme.spine),
+        roughness: 0.32,
+        metalness: 0.62,
+        envMapIntensity: 1.1,
+      });
+      const tieMat = new THREE.MeshStandardMaterial({
+        color: new THREE.Color(theme.tie),
+        roughness: 0.40,
+        metalness: 0.52,
+      });
+      const supMat = new THREE.MeshStandardMaterial({
+        color: new THREE.Color(theme.support),
+        roughness: 0.42,
+        metalness: 0.45,
+      });
+      const footerMat = new THREE.MeshStandardMaterial({
+        color: 0x94a3b8,
+        roughness: 0.92,
+        metalness: 0.05,
+      });
+      const brakeMat = new THREE.MeshStandardMaterial({
+        color: 0xd97706,
+        roughness: 0.25,
+        metalness: 0.85,
+      });
+      const boostMat = new THREE.MeshStandardMaterial({
+        color: 0x1e293b,
+        roughness: 0.35,
+        metalness: 0.80,
+      });
 
       const segs = Math.min(2400, n);
       for (const pts of [left, right]) {
-        const geo = new THREE.TubeGeometry(new PointsCurve(pts), segs, 0.62, 6, false);
+        const geo = new THREE.TubeGeometry(new PointsCurve(pts), segs, 0.62, 8, false);
         const mesh = new THREE.Mesh(geo, railMat);
         mesh.castShadow = true;
         st.trackGroup.add(mesh);
       }
-      const spineGeo = new THREE.TubeGeometry(new PointsCurve(spine), Math.floor(segs / 2), 1.15, 6, false);
+      const spineGeo = new THREE.TubeGeometry(new PointsCurve(spine), Math.floor(segs / 2), 1.15, 8, false);
       const spineMesh = new THREE.Mesh(spineGeo, spineMat);
       spineMesh.castShadow = true;
       st.trackGroup.add(spineMesh);
@@ -340,11 +492,65 @@ export default function Ride3D({ built, simRef, theme, camMode }: Props) {
       ties.instanceMatrix.needsUpdate = true;
       st.trackGroup.add(ties);
 
-      // Supports
+      // Special track elements: magnetic trim brake fins & LSM boost stators
+      let brakeCount = 0;
+      let boostCount = 0;
+      for (let i = 0; i < n; i += 3) {
+        if (S[i].special === 1) brakeCount++;
+        else if (S[i].special === 2) boostCount++;
+      }
+
+      if (brakeCount > 0) {
+        const brakeFins = new THREE.InstancedMesh(new THREE.BoxGeometry(0.35, 1.6, 3.8), brakeMat, brakeCount);
+        brakeFins.castShadow = true;
+        let bi = 0;
+        for (let i = 0; i < n && bi < brakeCount; i += 3) {
+          if (S[i].special !== 1) continue;
+          const s = S[i];
+          T.set(built.tan[i * 3], built.tan[i * 3 + 1], built.tan[i * 3 + 2]);
+          const nb = nbArr[i];
+          const rb = rbArr[i];
+          const zAxis = new THREE.Vector3().copy(T).negate();
+          const basis = new THREE.Matrix4().makeBasis(rb, nb, zAxis);
+          q.setFromRotationMatrix(basis);
+          m4.compose(new THREE.Vector3(s.px, s.py, s.pz).addScaledVector(nb, -0.3), q, new THREE.Vector3(1, 1, 1));
+          brakeFins.setMatrixAt(bi, m4);
+          bi++;
+        }
+        brakeFins.count = bi;
+        brakeFins.instanceMatrix.needsUpdate = true;
+        st.trackGroup.add(brakeFins);
+      }
+
+      if (boostCount > 0) {
+        const boostStators = new THREE.InstancedMesh(new THREE.BoxGeometry(3.6, 0.9, 3.8), boostMat, boostCount);
+        boostStators.castShadow = true;
+        let bi = 0;
+        for (let i = 0; i < n && bi < boostCount; i += 3) {
+          if (S[i].special !== 2) continue;
+          const s = S[i];
+          T.set(built.tan[i * 3], built.tan[i * 3 + 1], built.tan[i * 3 + 2]);
+          const nb = nbArr[i];
+          const rb = rbArr[i];
+          const zAxis = new THREE.Vector3().copy(T).negate();
+          const basis = new THREE.Matrix4().makeBasis(rb, nb, zAxis);
+          q.setFromRotationMatrix(basis);
+          m4.compose(new THREE.Vector3(s.px, s.py, s.pz).addScaledVector(nb, -0.6), q, new THREE.Vector3(1, 1, 1));
+          boostStators.setMatrixAt(bi, m4);
+          bi++;
+        }
+        boostStators.count = bi;
+        boostStators.instanceMatrix.needsUpdate = true;
+        st.trackGroup.add(boostStators);
+      }
+
+      // Supports with realistic tubular columns and concrete foundation footers
       const supEvery = Math.max(4, Math.round(26 / ds));
       const supMax = Math.floor(n / supEvery) + 2;
-      const sup = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), supMat, supMax);
+      const sup = new THREE.InstancedMesh(new THREE.CylinderGeometry(1.2, 1.2, 1, 10), supMat, supMax);
       sup.castShadow = true;
+      const footers = new THREE.InstancedMesh(new THREE.CylinderGeometry(2.4, 2.9, 2.6, 8), footerMat, supMax);
+      footers.receiveShadow = true;
       let si = 0;
       for (let i = 0; i < n && si < supMax; i += supEvery) {
         const s = S[i];
@@ -352,37 +558,60 @@ export default function Ride3D({ built, simRef, theme, camMode }: Props) {
         const nb = nbArr[i];
         if (nb.y < 0.35) continue; // Skip columns through inverted loop portions
         const hgt = s.py - G - 1.5;
+
+        // Support column
         m4.compose(
           new THREE.Vector3(s.px, G + hgt / 2, s.pz),
           new THREE.Quaternion(),
-          new THREE.Vector3(2.1, hgt, 2.1),
+          new THREE.Vector3(1, hgt, 1),
         );
         sup.setMatrixAt(si, m4);
+
+        // Concrete footer at ground level
+        m4.compose(
+          new THREE.Vector3(s.px, G + 1.3, s.pz),
+          new THREE.Quaternion(),
+          new THREE.Vector3(1, 1, 1),
+        );
+        footers.setMatrixAt(si, m4);
         si++;
       }
       sup.count = si;
       sup.instanceMatrix.needsUpdate = true;
+      footers.count = si;
+      footers.instanceMatrix.needsUpdate = true;
       st.trackGroup.add(sup);
+      st.trackGroup.add(footers);
 
-      // Station platform
-      const plat = new THREE.Mesh(
-        new THREE.BoxGeometry(26, 2, 16),
-        new THREE.MeshLambertMaterial({ color: 0xcbd5e1 }),
-      );
+      // Station platform with architectural concrete deck & safety yellow demarcation
+      const platGroup = new THREE.Group();
+      const platMat = new THREE.MeshStandardMaterial({ color: 0x94a3b8, roughness: 0.85, metalness: 0.1 });
+      const plat = new THREE.Mesh(new THREE.BoxGeometry(28, 2.2, 18), platMat);
       const s0 = S[0];
-      plat.position.set(s0.px + 6, s0.py - 3, s0.pz);
+      plat.position.set(s0.px + 6.5, s0.py - 3.2, s0.pz);
       plat.receiveShadow = true;
-      st.trackGroup.add(plat);
-      const roof = new THREE.Mesh(
-        new THREE.ConeGeometry(17, 8, 4),
-        new THREE.MeshLambertMaterial({ color: new THREE.Color(theme.accent) }),
-      );
-      roof.rotation.y = Math.PI / 4;
-      roof.position.set(s0.px + 6, s0.py + 9, s0.pz);
-      roof.castShadow = true;
-      st.trackGroup.add(roof);
+      platGroup.add(plat);
 
-      // Scenery
+      // Caution stripe along the edge of the boarding platform
+      const stripeMat = new THREE.MeshStandardMaterial({ color: 0xeab308, roughness: 0.4, metalness: 0.2 });
+      const stripe = new THREE.Mesh(new THREE.BoxGeometry(28, 0.1, 0.8), stripeMat);
+      stripe.position.set(s0.px + 6.5, s0.py - 2.05, s0.pz - 4.5);
+      platGroup.add(stripe);
+
+      // Station roof canopy
+      const roofMat = new THREE.MeshStandardMaterial({
+        color: new THREE.Color(theme.accent),
+        roughness: 0.35,
+        metalness: 0.45,
+      });
+      const roof = new THREE.Mesh(new THREE.ConeGeometry(18, 7.5, 4), roofMat);
+      roof.rotation.y = Math.PI / 4;
+      roof.position.set(s0.px + 6.5, s0.py + 9.5, s0.pz);
+      roof.castShadow = true;
+      platGroup.add(roof);
+      st.trackGroup.add(platGroup);
+
+      // Scenery with PBR Standard Materials
       const rnd = mulberry(1337);
       const coarse: THREE.Vector2[] = [];
       for (let i = 0; i < n; i += Math.max(1, Math.floor(n / 120))) coarse.push(new THREE.Vector2(S[i].px, S[i].pz));
@@ -399,10 +628,10 @@ export default function Ride3D({ built, simRef, theme, camMode }: Props) {
       const cz = built.center3.z;
       const spread = built.radius3 * 2.4 + 400;
 
-      const trunkGeo = new THREE.CylinderGeometry(1.1, 1.5, 7, 5);
+      const trunkGeo = new THREE.CylinderGeometry(1.1, 1.5, 7, 6);
       const leafGeo = new THREE.ConeGeometry(6.5, 20, 6);
-      const trunkMat = new THREE.MeshLambertMaterial({ color: 0x8b5e3c });
-      const leafMat = new THREE.MeshLambertMaterial({ color: 0x3f9e4d });
+      const trunkMat = new THREE.MeshStandardMaterial({ color: 0x6e4a2e, roughness: 0.90, metalness: 0.05 });
+      const leafMat = new THREE.MeshStandardMaterial({ color: 0x2e7d32, roughness: 0.65, metalness: 0.02 });
       const COUNT = 150;
       const trunks = new THREE.InstancedMesh(trunkGeo, trunkMat, COUNT);
       const leaves = new THREE.InstancedMesh(leafGeo, leafMat, COUNT);
@@ -427,8 +656,8 @@ export default function Ride3D({ built, simRef, theme, camMode }: Props) {
       leaves.instanceMatrix.needsUpdate = true;
       st.sceneryGroup.add(trunks, leaves);
 
-      // Distant hills
-      const hillMat = new THREE.MeshLambertMaterial({ color: 0x74b85f, flatShading: true });
+      // Distant hills with soft PBR shading
+      const hillMat = new THREE.MeshStandardMaterial({ color: 0x5a9a46, roughness: 0.85, flatShading: true });
       const hills = new THREE.InstancedMesh(new THREE.ConeGeometry(1, 1, 7), hillMat, 14);
       for (let i = 0; i < 14; i++) {
         const ang = (i / 14) * Math.PI * 2 + rnd() * 0.3;
@@ -446,7 +675,12 @@ export default function Ride3D({ built, simRef, theme, camMode }: Props) {
       st.sceneryGroup.add(hills);
 
       // Clouds
-      const cloudMat = new THREE.MeshLambertMaterial({ color: 0xffffff, emissive: 0x9ab8d8, emissiveIntensity: 0.25 });
+      const cloudMat = new THREE.MeshStandardMaterial({
+        color: 0xffffff,
+        roughness: 0.95,
+        emissive: 0xb0cce8,
+        emissiveIntensity: 0.28,
+      });
       const clouds = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(1, 0), cloudMat, 42);
       for (let i = 0; i < 42; i++) {
         const ang = rnd() * Math.PI * 2;
@@ -520,7 +754,7 @@ export default function Ride3D({ built, simRef, theme, camMode }: Props) {
       tmpT.set(f.tx, f.ty, f.tz).normalize();
       tmpN.set(f.nx, f.ny, f.nz).normalize();
       tmpR.copy(tmpT).cross(tmpN).normalize();
-      const dynamicLean = Math.max(-0.3, Math.min(0.3, sim.lat * 0.1));
+      const dynamicLean = Math.max(-0.25, Math.min(0.25, -sim.lat * 0.08));
       const b = f.bank + dynamicLean;
       nb.copy(tmpN).multiplyScalar(Math.cos(b)).addScaledVector(tmpR, -Math.sin(b)).normalize();
       rb.copy(tmpR).multiplyScalar(Math.cos(b)).addScaledVector(tmpN, Math.sin(b)).normalize();
@@ -549,51 +783,63 @@ export default function Ride3D({ built, simRef, theme, camMode }: Props) {
       }
 
       if (mode === 'pov') {
-        target.set(f.px, f.py, f.pz).addScaledVector(nb, 3.6).addScaledVector(tmpT, 3.2);
+        // Vertical G-force inertia: passenger body compresses down on pullouts, floats up on airtime
+        const gOffset = Math.max(-0.55, Math.min(0.45, (1 - sim.g) * 0.22));
+        target
+          .set(f.px, f.py, f.pz)
+          .addScaledVector(nb, 3.6 + gOffset)
+          .addScaledVector(tmpT, 3.2);
+
         basis.makeBasis(rb, nb, tmpT.clone().negate());
         q.setFromRotationMatrix(basis);
 
-        // Dynamic speed shake
+        // High-frequency harmonic rail vibration (steel wheel contact on tubular rails)
         const sh = sim.shake;
         if (sh > 0.001) {
           const t = now * 0.001;
-          const rx = Math.sin(t * 37.1) * 0.010 * sh + Math.sin(t * 13.3) * 0.004 * sh;
-          const ry = Math.sin(t * 29.7) * 0.012 * sh;
-          const rz = Math.sin(t * 23.3) * 0.010 * sh;
+          const rx = (Math.sin(t * 54.0) * 0.007 + Math.sin(t * 88.0) * 0.003) * sh;
+          const ry = Math.sin(t * 42.0) * 0.008 * sh;
+          const rz = (Math.sin(t * 63.0) * 0.007 + Math.sin(t * 110.0) * 0.002) * sh;
           q2.setFromEuler(new THREE.Euler(rx, ry, rz));
           q.multiply(q2);
-          target.addScaledVector(nb, Math.sin(t * 41) * 0.16 * sh);
+          target.addScaledVector(nb, Math.sin(t * 70) * 0.12 * sh);
         }
-        const k = 1 - Math.exp(-dt * 22);
-        st.camPos.lerp(target, k);
-        st.camQuat.slerp(q, 1 - Math.exp(-dt * 16));
+
+        // Fast, responsive tracking without visual lag or jitter
+        const kPos = 1 - Math.exp(-dt * 32);
+        const kRot = 1 - Math.exp(-dt * 26);
+        st.camPos.lerp(target, kPos);
+        st.camQuat.slerp(q, kRot);
         st.camera.position.copy(st.camPos);
         st.camera.quaternion.copy(st.camQuat);
 
-        // Speed fov effect (imperial mph scaling)
-        const fovTarget = 62 + Math.min(28, (sim.speed / 85) * 26);
-        st.fov += (fovTarget - st.fov) * Math.min(1, dt * 3);
+        // Realistic dynamic FOV expanding with speed (optical flow rush effect)
+        const speedRatio = Math.min(1.2, sim.speed / 85);
+        const fovTarget = 64 + speedRatio * 20; // 64 deg at rest -> 84+ deg at high speed
+        st.fov += (fovTarget - st.fov) * Math.min(1, dt * 6);
       } else if (mode === 'chase') {
         // Chase camera positioned behind the car along the track frame
+        const speedRatio = Math.min(1.2, sim.speed / 85);
         target
           .set(f.px, f.py, f.pz)
-          .addScaledVector(nb, 11)
-          .addScaledVector(tmpT, -36);
+          .addScaledVector(nb, 11 + speedRatio * 1.5)
+          .addScaledVector(tmpT, -36 - speedRatio * 4);
         target.y = Math.max(target.y, bt.groundY + 8);
-        const k = 1 - Math.exp(-dt * 7);
+        const k = 1 - Math.exp(-dt * 12);
         st.camPos.lerp(target, k);
         st.camera.position.copy(st.camPos);
 
         // Use track normal `nb` as up-vector to avoid gimbal-lock flips in vertical loops
         lookM.lookAt(
           st.camPos,
-          new THREE.Vector3(f.px, f.py, f.pz).addScaledVector(tmpT, 10),
+          new THREE.Vector3(f.px, f.py, f.pz).addScaledVector(tmpT, 8),
           nb,
         );
         q.setFromRotationMatrix(lookM);
-        st.camQuat.slerp(q, 1 - Math.exp(-dt * 12));
+        st.camQuat.slerp(q, 1 - Math.exp(-dt * 18));
         st.camera.quaternion.copy(st.camQuat);
-        st.fov += (60 - st.fov) * Math.min(1, dt * 3);
+        const fovTarget = 60 + speedRatio * 8;
+        st.fov += (fovTarget - st.fov) * Math.min(1, dt * 4);
       } else {
         // Aerial orbit
         st.orbit += dt * 0.09;
@@ -605,11 +851,11 @@ export default function Ride3D({ built, simRef, theme, camMode }: Props) {
           bt.maxHeight * 0.9 + 110,
           cz + Math.sin(st.orbit) * r,
         );
-        st.camPos.lerp(target, 1 - Math.exp(-dt * 5));
+        st.camPos.lerp(target, 1 - Math.exp(-dt * 6));
         st.camera.position.copy(st.camPos);
         lookM.lookAt(st.camPos, new THREE.Vector3(cx, bt.maxHeight * 0.35, cz), new THREE.Vector3(0, 1, 0));
         q.setFromRotationMatrix(lookM);
-        st.camQuat.slerp(q, 1 - Math.exp(-dt * 6));
+        st.camQuat.slerp(q, 1 - Math.exp(-dt * 8));
         st.camera.quaternion.copy(st.camQuat);
         st.fov += (55 - st.fov) * Math.min(1, dt * 3);
       }

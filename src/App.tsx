@@ -137,7 +137,7 @@ export default function App() {
       last = now;
       if (playingRef.current) stepSim(simRef.current, builtRef.current, dt, cfgRef.current);
       acc += dt;
-      if (acc > 0.065) {
+      if (acc > 0.033) {
         acc = 0;
         const s = simRef.current;
         setHud({
