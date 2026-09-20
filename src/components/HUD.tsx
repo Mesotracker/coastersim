@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { CamMode } from './Ride3D';
+import { Sun, Sunset, Moon, CloudRain, Crosshair } from 'lucide-react';
+import { CamMode, WeatherType } from './Ride3D';
 import SpeedGraph from './SpeedGraph';
 import { TelemetryPoint } from '../lib/physics';
 
@@ -26,6 +27,13 @@ const MODES: { id: CamMode; label: string }[] = [
   { id: 'orbit', label: 'Aerial' },
 ];
 
+const WEATHERS: { id: WeatherType; label: string; icon: typeof Sun }[] = [
+  { id: 'day', label: 'Day', icon: Sun },
+  { id: 'sunset', label: 'Sunset', icon: Sunset },
+  { id: 'night', label: 'Night', icon: Moon },
+  { id: 'storm', label: 'Storm', icon: CloudRain },
+];
+
 function Stat({ label, value, accent }: { label: string; value: string; accent?: string }) {
   return (
     <div className="rounded-xl bg-black/50 px-3 py-1.5 backdrop-blur-md ring-1 ring-white/15 shadow-sm">
@@ -41,11 +49,19 @@ export default function HUD({
   hud,
   camMode,
   setCamMode,
+  weather,
+  setWeather,
+  aerialFollow,
+  setAerialFollow,
   playing,
 }: {
   hud: HudData;
   camMode: CamMode;
   setCamMode: (m: CamMode) => void;
+  weather: WeatherType;
+  setWeather: (w: WeatherType) => void;
+  aerialFollow: boolean;
+  setAerialFollow: (v: boolean | ((prev: boolean) => boolean)) => void;
   playing: boolean;
 }) {
   const [showGraph, setShowGraph] = useState(false);
@@ -93,37 +109,89 @@ export default function HUD({
         </div>
       </div>
 
-      {/* Top-right camera modes & graph toggle */}
-      <div className="pointer-events-auto absolute right-3 top-3 flex items-center gap-1.5">
-        <button
-          onClick={() => setShowGraph((v) => !v)}
-          title="Toggle speed graph over time"
-          className={`flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-[11px] font-bold backdrop-blur-sm ring-1 transition ${
-            showGraph
-              ? 'bg-sky-500 text-white ring-sky-300 shadow-md shadow-sky-500/30'
-              : 'bg-black/45 text-white/80 ring-white/15 hover:bg-black/60 hover:text-white'
-          }`}
-        >
-          <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth={2.4} strokeLinecap="round" strokeLinejoin="round">
-            <path d="M3 3v18h18" />
-            <path d="M18 9l-5 5-4-4-6 6" />
-          </svg>
-          <span>Speed Graph</span>
-        </button>
+      {/* Top-right camera modes, weather selector & graph toggle */}
+      <div className="pointer-events-auto absolute right-3 top-3 flex flex-col items-end gap-2">
+        <div className="flex items-center gap-1.5">
+          <button
+            onClick={() => setShowGraph((v) => !v)}
+            title="Toggle speed graph over time"
+            className={`flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-[11px] font-bold backdrop-blur-sm ring-1 transition ${
+              showGraph
+                ? 'bg-sky-500 text-white ring-sky-300 shadow-md shadow-sky-500/30'
+                : 'bg-black/45 text-white/80 ring-white/15 hover:bg-black/60 hover:text-white'
+            }`}
+          >
+            <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth={2.4} strokeLinecap="round" strokeLinejoin="round">
+              <path d="M3 3v18h18" />
+              <path d="M18 9l-5 5-4-4-6 6" />
+            </svg>
+            <span>Speed Graph</span>
+          </button>
 
-        <div className="flex gap-1 rounded-lg bg-black/45 p-1 backdrop-blur-sm ring-1 ring-white/15">
-          {MODES.map((m) => (
+          <div className="flex gap-1 rounded-lg bg-black/45 p-1 backdrop-blur-sm ring-1 ring-white/15">
+            {MODES.map((m) => (
+              <button
+                key={m.id}
+                onClick={() => setCamMode(m.id)}
+                className={`rounded-md px-2.5 py-1 text-[11px] font-bold transition ${
+                  camMode === m.id ? 'bg-white text-slate-900 shadow-sm' : 'text-white/70 hover:bg-white/10 hover:text-white'
+                }`}
+              >
+                {m.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Dynamic Weather & Time of Day selector */}
+        <div className="flex items-center gap-1 rounded-lg bg-black/45 p-1 backdrop-blur-sm ring-1 ring-white/15">
+          <span className="px-1.5 text-[9px] font-bold uppercase tracking-wider text-white/50">Weather</span>
+          {WEATHERS.map((w) => {
+            const Icon = w.icon;
+            const active = weather === w.id;
+            return (
+              <button
+                key={w.id}
+                onClick={() => setWeather(w.id)}
+                title={`Set atmosphere to ${w.label}`}
+                className={`flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-bold transition ${
+                  active
+                    ? 'bg-amber-400 text-slate-950 shadow-xs'
+                    : 'text-white/70 hover:bg-white/10 hover:text-white'
+                }`}
+              >
+                <Icon className="h-3 w-3" />
+                <span>{w.label}</span>
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Aerial Drone active control indicator */}
+        {camMode === 'orbit' && (
+          <div className="flex items-center gap-2 rounded-xl bg-slate-950/80 px-3 py-1.5 text-[11px] font-medium text-white/90 shadow-lg backdrop-blur-md ring-1 ring-white/15">
+            <div className="flex items-center gap-1.5 text-sky-400">
+              <span className="relative flex h-2 w-2">
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-sky-400 opacity-75" />
+                <span className="relative inline-flex h-2 w-2 rounded-full bg-sky-500" />
+              </span>
+              <span className="font-bold">Movable Drone</span>
+            </div>
+            <span className="text-white/40">|</span>
+            <span className="text-white/70 hidden sm:inline">Drag to steer · Wheel zoom</span>
             <button
-              key={m.id}
-              onClick={() => setCamMode(m.id)}
-              className={`rounded-md px-2.5 py-1 text-[11px] font-bold transition ${
-                camMode === m.id ? 'bg-white text-slate-900 shadow-sm' : 'text-white/70 hover:bg-white/10 hover:text-white'
+              onClick={() => setAerialFollow((prev) => !prev)}
+              className={`flex items-center gap-1 rounded-lg px-2 py-0.5 text-[10px] font-bold transition ${
+                aerialFollow
+                  ? 'bg-sky-500/30 text-sky-200 ring-1 ring-sky-400/40'
+                  : 'bg-white/10 text-white/60 hover:text-white'
               }`}
             >
-              {m.label}
+              <Crosshair className="h-3 w-3" />
+              <span>{aerialFollow ? 'Tracking Car' : 'Free Orbit'}</span>
             </button>
-          ))}
-        </div>
+          </div>
+        )}
       </div>
 
       {/* Floating Speed Graph Overlay (when toggled on) */}

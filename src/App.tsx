@@ -14,7 +14,7 @@ import {
   Activity,
 } from 'lucide-react';
 import Editor2D from './components/Editor2D';
-import Ride3D, { CamMode } from './components/Ride3D';
+import Ride3D, { CamMode, WeatherType } from './components/Ride3D';
 import Toolbar from './components/Toolbar';
 import Inspector from './components/Inspector';
 import HUD, { HudData } from './components/HUD';
@@ -98,6 +98,8 @@ export default function App() {
   const [settings, setSettings] = useState<SimSettings>(DEFAULT_SETTINGS);
   const [theme, setTheme] = useState<Theme>(THEMES[0]);
   const [camMode, setCamMode] = useState<CamMode>('pov');
+  const [weather, setWeather] = useState<WeatherType>('day');
+  const [aerialFollow, setAerialFollow] = useState<boolean>(true);
   const [snap, setSnap] = useState(true);
   const [fitSignal, setFitSignal] = useState(0);
   const [tab, setTab] = useState<Tab>('piece');
@@ -965,8 +967,19 @@ export default function App() {
               theme={theme}
               material={settings.material}
               camMode={camMode}
+              weather={weather}
+              aerialFollow={aerialFollow}
             />
-            <HUD hud={hud} camMode={camMode} setCamMode={setCamMode} playing={playing} />
+            <HUD
+              hud={hud}
+              camMode={camMode}
+              setCamMode={setCamMode}
+              weather={weather}
+              setWeather={setWeather}
+              aerialFollow={aerialFollow}
+              setAerialFollow={setAerialFollow}
+              playing={playing}
+            />
           </section>
         </div>
       </main>

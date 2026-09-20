@@ -252,8 +252,18 @@ export default function Editor2D(props: Props) {
           strokeRange(r.start, r.end, def.special === 1 ? '#f43f5e' : '#facc15', Math.max(3, 9 * v.zoom), 0.9);
           strokeRange(r.start, r.end, '#ffffff', Math.max(1, 2 * v.zoom), 0.7);
         }
-        if (piece.kind === 'curveL' || piece.kind === 'curveR') {
-          ctx.setLineDash([6, 6]);
+        if (
+          piece.kind === 'curveL' ||
+          piece.kind === 'curveR' ||
+          piece.kind === 'zeroGRoll' ||
+          piece.kind === 'corkscrew' ||
+          piece.kind === 'immelmann'
+        ) {
+          ctx.setLineDash(
+            piece.kind === 'zeroGRoll' || piece.kind === 'corkscrew' || piece.kind === 'immelmann'
+              ? [4, 4]
+              : [6, 6],
+          );
           strokeRange(r.start, r.end, def.color, Math.max(2, 4 * v.zoom), 0.95);
           ctx.setLineDash([]);
         }

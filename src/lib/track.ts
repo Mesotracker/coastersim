@@ -16,6 +16,9 @@ export type PieceKind =
   | 'hill'
   | 'valley'
   | 'loop'
+  | 'zeroGRoll'
+  | 'corkscrew'
+  | 'immelmann'
   | 'jump'
   | 'brake'
   | 'boost';
@@ -43,6 +46,7 @@ export interface Seg {
   len: number;
   pitch: number; // degrees turned over the segment
   yaw: number; // degrees turned over the segment
+  roll?: number; // degrees rolled (heartline banking twist)
 }
 
 export interface PieceDef {
@@ -139,6 +143,44 @@ export const PIECE_DEFS: Record<PieceKind, PieceDef> = {
       { len: 18, pitch: 0, yaw: 0 },
     ],
   },
+  zeroGRoll: {
+    label: 'Zero-G Roll',
+    color: '#8b5cf6',
+    hint: 'Parabolic airtime crest with full 360° weightless heartline roll',
+    target: 0,
+    glyph: 'M2 19c6 0 6-13 10-13s4 13 10 13 M8 12a4 4 0 1 0 8 0',
+    body: [
+      { len: 34, pitch: 30, yaw: 0, roll: 70 },
+      { len: 76, pitch: -60, yaw: 0, roll: 220 },
+      { len: 34, pitch: 30, yaw: 0, roll: 70 },
+    ],
+  },
+  corkscrew: {
+    label: 'Corkscrew',
+    color: '#06b6d4',
+    hint: '360° twist inversion combined with a banked lateral curve',
+    target: 0,
+    glyph: 'M2 18c4 0 6-8 10-8s4 8 10 8 M8 14c2-4 6-4 8 0',
+    body: [
+      { len: 34, pitch: 26, yaw: 22, roll: 90 },
+      { len: 62, pitch: -52, yaw: 46, roll: 180 },
+      { len: 34, pitch: 26, yaw: 22, roll: 90 },
+    ],
+  },
+  immelmann: {
+    label: 'Immelmann',
+    color: '#ec4899',
+    hint: 'Half vertical loop into a 180° twist turnaround',
+    target: 0,
+    glyph: 'M2 18h4c2 0 4-6 6-12 2 6 4 12 6 12h4 M8 9l8 6',
+    body: [
+      { len: 20, pitch: 0, yaw: 0, roll: 0 },
+      { len: 52, pitch: 65, yaw: 35, roll: 90 },
+      { len: 64, pitch: 45, yaw: 110, roll: 180 },
+      { len: 52, pitch: -65, yaw: 35, roll: 90 },
+      { len: 20, pitch: -45, yaw: 0, roll: 0 },
+    ],
+  },
   jump: {
     label: 'Mid-Air Jump',
     color: '#0284c7',
@@ -181,6 +223,9 @@ export const PIECE_ORDER: PieceKind[] = [
   'hill',
   'valley',
   'loop',
+  'zeroGRoll',
+  'corkscrew',
+  'immelmann',
   'jump',
   'brake',
   'boost',
@@ -200,6 +245,7 @@ export interface Sample {
   y: number;
   pitch: number; // radians, + = climbing
   yaw: number; // radians
+  roll: number; // radians (accumulated banking twist)
   kappa: number; // pitch curvature rad / unit
   yawRate: number; // rad / unit
   bank: number; // radians
@@ -258,16 +304,22 @@ export function segsFor(piece: Piece, entryPitch = 0): Seg[] {
   while (d < -180) d += 360;
 
   if (Math.abs(d) > 0.4) {
-    out.push({ len: Math.max(14, Math.abs(d) * 1.8), pitch: d, yaw: 0 });
+    out.push({ len: Math.max(14, Math.abs(d) * 1.8), pitch: d, yaw: 0, roll: 0 });
   }
 
-  // Vertical loops must sum to exactly 360° to stay closed & level
-  const isLoop = piece.kind === 'loop';
+  // Exact inversion elements (loops, zero-G rolls, corkscrews, immelmanns) maintain precision geometry
+  const isFixed =
+    piece.kind === 'loop' ||
+    piece.kind === 'zeroGRoll' ||
+    piece.kind === 'corkscrew' ||
+    piece.kind === 'immelmann';
+
   for (const s of def.body) {
     out.push({
       len: Math.max(4, s.len * piece.len),
-      pitch: isLoop ? s.pitch : s.pitch * piece.power,
-      yaw: s.yaw * piece.power,
+      pitch: isFixed ? s.pitch : s.pitch * piece.power,
+      yaw: isFixed ? s.yaw : s.yaw * piece.power,
+      roll: s.roll ?? 0,
     });
   }
   return out;
@@ -283,6 +335,7 @@ export function buildTrack(track: TrackDef): BuiltTrack {
   let y = track.origin.y;
   let pitch = track.startPitch * DEG;
   let yaw = 0;
+  let roll = 0;
   let px = 0;
   let py = track.origin.y;
   let pz = 0;
@@ -297,7 +350,7 @@ export function buildTrack(track: TrackDef): BuiltTrack {
   let maxPZ = 0;
 
   const push = (piece: number, special: Special, kappa: number, yawRate: number) => {
-    samples.push({ s, x, y, pitch, yaw, kappa, yawRate, bank: 0, px, py, pz, piece, special });
+    samples.push({ s, x, y, pitch, yaw, roll, kappa, yawRate, bank: 0, px, py, pz, piece, special });
     if (x < minX) minX = x;
     if (x > maxX) maxX = x;
     if (y < minY) minY = y;
@@ -325,6 +378,7 @@ export function buildTrack(track: TrackDef): BuiltTrack {
       const ds = len / n;
       const kappa = (seg.pitch * DEG) / len;
       const yawRate = (seg.yaw * DEG) / len;
+      const rollRate = ((seg.roll ?? 0) * DEG) / len;
       for (let i = 0; i < n; i++) {
         push(pi, special, kappa, yawRate);
         const h = Math.cos(pitch) * ds;
@@ -336,6 +390,7 @@ export function buildTrack(track: TrackDef): BuiltTrack {
         py += vUp;
         pitch += kappa * ds;
         yaw += yawRate * ds;
+        roll += rollRate * ds;
         s += ds;
       }
     }
@@ -344,6 +399,10 @@ export function buildTrack(track: TrackDef): BuiltTrack {
     while (pitch > Math.PI) pitch -= Math.PI * 2;
     while (pitch < -Math.PI) pitch += Math.PI * 2;
 
+    // Normalize roll angle if it made full rotations
+    while (roll >= Math.PI * 2) roll -= Math.PI * 2;
+    while (roll <= -Math.PI * 2) roll += Math.PI * 2;
+
     pieceRanges.push({ start, end: Math.max(start, samples.length - 1) });
     nodes.push({ x, y, pitch });
   }
@@ -351,7 +410,7 @@ export function buildTrack(track: TrackDef): BuiltTrack {
 
   const n = samples.length;
 
-  // ---- banking (baked from horizontal curvature) --------------------------
+  // ---- banking (baked from horizontal curvature + procedural roll twist) ---
   const raw = new Float32Array(n);
   const vRef = 16; // m/s reference speed used to bake the banking
   for (let i = 0; i < n; i++) {
@@ -368,7 +427,8 @@ export function buildTrack(track: TrackDef): BuiltTrack {
       sum += raw[j];
       cnt++;
     }
-    samples[i].bank = sum / cnt;
+    // Centrifugal curvature bank plus procedural heartline roll twist
+    samples[i].bank = sum / cnt + samples[i].roll;
   }
 
   // ---- 3D frames via parallel transport -----------------------------------
@@ -672,10 +732,40 @@ export const PRESETS: Preset[] = [
     }),
   },
   {
+    id: 'zero-g-phantom',
+    name: 'Phantom Zero-G & Corkscrew',
+    category: 'Inversion',
+    description: 'B&M style custom floorless coaster with a 140 ft drop, soaring weightless Zero-G Roll, towering Immelmann turnaround, and high-speed Corkscrews.',
+    themeName: 'Neon Cyber',
+    build: () => ({
+      origin: { x: 0, y: 32 },
+      startPitch: 0,
+      pieces: [
+        piece('straight', { len: 1.0 }),
+        piece('up', { len: 1.2 }),
+        piece('up', { len: 1.2 }),
+        piece('up', { len: 1.2 }),
+        piece('down', { len: 1.3, power: 1.3 }),
+        piece('down', { len: 1.3, power: 1.3 }),
+        piece('zeroGRoll', { len: 1.1 }),
+        piece('valley', { len: 1.1 }),
+        piece('immelmann', { len: 1.05 }),
+        piece('boost', { len: 1.1 }),
+        piece('corkscrew', { len: 1.1 }),
+        piece('curveR', { len: 1.2, power: 1.0 }),
+        piece('hill', { len: 1.1, power: 1.0 }),
+        piece('corkscrew', { len: 1.05 }),
+        piece('curveL', { len: 1.1, power: 1.0 }),
+        piece('brake', { len: 1.3 }),
+        piece('straight', { len: 1.0 }),
+      ],
+    }),
+  },
+  {
     id: 'cobra-blitz',
     name: 'Cobra Roll & Corkscrew',
     category: 'Inversion',
-    description: 'Steel speed demon with a towering vertical loop, fast turnaround sweep, second launch booster, inverted loop, and terrain-hugging curves.',
+    description: 'Steel speed demon with a towering vertical loop, fast turnaround sweep, high-speed Corkscrew, weightless Zero-G roll, and terrain-hugging curves.',
     themeName: 'Viper',
     build: () => ({
       origin: { x: 0, y: 30 },
@@ -689,10 +779,10 @@ export const PRESETS: Preset[] = [
         piece('down', { len: 1.2, power: 1.2 }),
         piece('loop', { len: 1.1, power: 1.1 }),
         piece('curveL', { len: 1.1, power: 1.0 }),
-        piece('hill', { len: 1.1 }),
+        piece('zeroGRoll', { len: 1.05 }),
         piece('curveL', { len: 1.1, power: 1.0 }),
         piece('boost', { len: 1.2 }),
-        piece('loop', { len: 1.05, power: 1.0 }),
+        piece('corkscrew', { len: 1.1 }),
         piece('valley', { len: 1.1 }),
         piece('curveR', { len: 1.2, power: 1.1 }),
         piece('curveR', { len: 1.2, power: 1.1 }),
@@ -708,26 +798,22 @@ export const PRESETS: Preset[] = [
     description: 'High vertical lift, holding brake cliffhanger, sheer 90-degree vertical dive into a massive Immelmann loop and high-banked helix.',
     themeName: 'Obsidian Gold',
     build: () => ({
-      origin: { x: 0, y: 28 },
+      origin: { x: 0, y: 40 },
       startPitch: 0,
       pieces: [
-        piece('straight', { len: 1.0 }),
-        piece('up', { len: 1.2 }),
-        piece('up', { len: 1.2 }),
-        piece('up', { len: 1.2 }),
-        piece('up', { len: 1.2 }),
-        piece('brake', { len: 0.8 }),
-        piece('down', { len: 1.3, power: 1.5 }),
-        piece('down', { len: 1.3, power: 1.5 }),
+        piece('straight', { len: 0.8 }),
+        piece('up', { len: 1.3 }),
+        piece('up', { len: 1.3 }),
+        piece('up', { len: 1.3 }),
+        piece('brake', { len: 0.7 }),
+        piece('down', { len: 1.4, power: 1.7 }),
+        piece('down', { len: 1.4, power: 1.7 }),
         piece('valley', { len: 1.2 }),
-        piece('loop', { len: 1.2, power: 1.1 }),
+        piece('immelmann', { len: 1.1 }),
         piece('curveR', { len: 1.2, power: 1.1 }),
-        piece('hill', { len: 1.2 }),
-        piece('down', { len: 1.1, power: 1.1 }),
-        piece('valley', { len: 1.1 }),
-        piece('curveR', { len: 1.1, power: 1.0 }),
-        piece('hill', { len: 1.1 }),
-        piece('brake', { len: 1.3 }),
+        piece('curveR', { len: 1.2, power: 1.1 }),
+        piece('zeroGRoll', { len: 1.0 }),
+        piece('brake', { len: 1.4 }),
         piece('straight', { len: 1.0 }),
       ],
     }),

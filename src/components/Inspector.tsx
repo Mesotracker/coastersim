@@ -173,7 +173,11 @@ export default function Inspector({
               ? 'Turn Radius'
               : piece.kind === 'loop'
                 ? 'Loop Scale'
-                : 'Steepness'
+                : piece.kind === 'zeroGRoll'
+                  ? 'Roll Scale'
+                  : piece.kind === 'corkscrew' || piece.kind === 'immelmann'
+                    ? 'Element Scale'
+                    : 'Steepness'
           }
           value={piece.power}
           min={0.2}

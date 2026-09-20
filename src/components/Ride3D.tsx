@@ -5,6 +5,7 @@ import { CoasterMaterial, SimState } from '../lib/physics';
 import { Theme } from '../lib/themes';
 
 export type CamMode = 'pov' | 'chase' | 'orbit';
+export type WeatherType = 'day' | 'sunset' | 'night' | 'storm';
 
 interface Props {
   built: BuiltTrack;
@@ -12,6 +13,8 @@ interface Props {
   theme: Theme;
   material?: CoasterMaterial;
   camMode: CamMode;
+  weather?: WeatherType;
+  aerialFollow?: boolean;
 }
 
 class PointsCurve extends THREE.Curve<THREE.Vector3> {
@@ -82,7 +85,15 @@ function groundTexture() {
   return tex;
 }
 
-export default function Ride3D({ built, simRef, theme, material = 'metal', camMode }: Props) {
+export default function Ride3D({
+  built,
+  simRef,
+  theme,
+  material = 'metal',
+  camMode,
+  weather = 'day',
+  aerialFollow = true,
+}: Props) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const stateRef = useRef<{
     renderer: THREE.WebGLRenderer;
@@ -92,20 +103,34 @@ export default function Ride3D({ built, simRef, theme, material = 'metal', camMo
     sceneryGroup: THREE.Group;
     ground: THREE.Mesh;
     sun: THREE.DirectionalLight;
+    hemi: THREE.HemisphereLight;
+    fillLight: THREE.DirectionalLight;
+    skyMat: THREE.ShaderMaterial;
     cockpit: THREE.Group;
     cars: THREE.Group[];
     carMat: THREE.MeshStandardMaterial;
     chassisMat: THREE.MeshStandardMaterial;
     seatMat: THREE.MeshStandardMaterial;
     chromeMat: THREE.MeshStandardMaterial;
+    headlights: THREE.SpotLight[];
+    rainPoints: THREE.Points;
+    rainPositions: Float32Array;
+    rainVelocities: Float32Array;
+    aerialDrone: THREE.Group;
+    pointerBeam: THREE.Mesh;
+    targetReticle: THREE.Mesh;
+    rotors: THREE.Mesh[];
     camPos: THREE.Vector3;
     camQuat: THREE.Quaternion;
+    aerialAzimuth: number;
+    aerialElevation: number;
+    aerialDist: number;
+    aerialTarget: THREE.Vector3;
     fov: number;
-    orbit: number;
     ready: boolean;
   } | null>(null);
-  const propsRef = useRef({ built, simRef, theme, material, camMode });
-  propsRef.current = { built, simRef, theme, material, camMode };
+  const propsRef = useRef({ built, simRef, theme, material, camMode, weather, aerialFollow });
+  propsRef.current = { built, simRef, theme, material, camMode, weather, aerialFollow };
 
   // ------------------------------------------------------------------ setup
   useEffect(() => {
@@ -281,7 +306,7 @@ export default function Ride3D({ built, simRef, theme, material = 'metal', camMo
         grill.position.set(0, 0.5, -9.2);
         c.add(grill);
 
-        // Dual headlights
+        // Dual headlights with real dynamic SpotLights
         const lightMat = new THREE.MeshStandardMaterial({
           color: 0xffffff,
           emissive: 0xfef08a,
@@ -293,11 +318,174 @@ export default function Ride3D({ built, simRef, theme, material = 'metal', camMo
           lamp.position.set(lx, 1.2, -8.6);
           c.add(lamp);
         }
+
+        const headlightL = new THREE.SpotLight(0xfff7ed, 0, 340, Math.PI / 5, 0.45, 1.1);
+        headlightL.position.set(-1.5, 1.2, -8.6);
+        const targetL = new THREE.Object3D();
+        targetL.position.set(-1.5, 0.5, -45);
+        c.add(headlightL);
+        c.add(targetL);
+        headlightL.target = targetL;
+
+        const headlightR = new THREE.SpotLight(0xfff7ed, 0, 340, Math.PI / 5, 0.45, 1.1);
+        headlightR.position.set(1.5, 1.2, -8.6);
+        const targetR = new THREE.Object3D();
+        targetR.position.set(1.5, 0.5, -45);
+        c.add(headlightR);
+        c.add(targetR);
+        headlightR.target = targetR;
       }
 
       scene.add(c);
       cars.push(c);
     }
+
+    const headlights: THREE.SpotLight[] = [];
+    cars[0].traverse((o) => {
+      if (o instanceof THREE.SpotLight) headlights.push(o);
+    });
+
+    // Storm rain particles
+    const rainCount = 2000;
+    const rainGeo = new THREE.BufferGeometry();
+    const rainPositions = new Float32Array(rainCount * 3);
+    const rainVelocities = new Float32Array(rainCount);
+    for (let i = 0; i < rainCount; i++) {
+      rainPositions[i * 3] = (Math.random() - 0.5) * 1400;
+      rainPositions[i * 3 + 1] = Math.random() * 600;
+      rainPositions[i * 3 + 2] = (Math.random() - 0.5) * 1400;
+      rainVelocities[i] = 220 + Math.random() * 120;
+    }
+    rainGeo.setAttribute('position', new THREE.BufferAttribute(rainPositions, 3));
+    const rainMat = new THREE.PointsMaterial({
+      color: 0x93c5fd,
+      size: 2.2,
+      transparent: true,
+      opacity: 0.65,
+    });
+    const rainPoints = new THREE.Points(rainGeo, rainMat);
+    rainPoints.visible = false;
+    scene.add(rainPoints);
+
+    // ================================================================
+    // AERIAL OBSERVER: Movable 3D Drone Model with Pointer
+    // ================================================================
+    const aerialDrone = new THREE.Group();
+    const droneBodyMat = new THREE.MeshStandardMaterial({
+      color: 0x0f172a,
+      metalness: 0.88,
+      roughness: 0.22,
+    });
+    const droneChassis = new THREE.Mesh(new THREE.BoxGeometry(4.8, 1.4, 6.4), droneBodyMat);
+    droneChassis.castShadow = true;
+    aerialDrone.add(droneChassis);
+
+    // Canopy top with glowing cyan visor
+    const canopyGeo = new THREE.CylinderGeometry(1.6, 2.0, 1.1, 16);
+    canopyGeo.scale(1, 0.7, 1.4);
+    const canopyMat = new THREE.MeshStandardMaterial({
+      color: 0x0284c7,
+      emissive: 0x0369a1,
+      emissiveIntensity: 0.7,
+      roughness: 0.12,
+      metalness: 0.85,
+    });
+    const canopy = new THREE.Mesh(canopyGeo, canopyMat);
+    canopy.position.set(0, 0.7, 0.4);
+    aerialDrone.add(canopy);
+
+    // 4 Quadcopter rotor arms and blades
+    const rotors: THREE.Mesh[] = [];
+    const armCoords = [
+      { x: -3.8, z: -3.6, led: 0xef4444 }, // port rear
+      { x: 3.8, z: -3.6, led: 0x22c55e },  // stbd rear
+      { x: -3.8, z: 3.6, led: 0xef4444 },  // port front
+      { x: 3.8, z: 3.6, led: 0x22c55e },   // stbd front
+    ];
+    armCoords.forEach((pos) => {
+      // Boom arm strut
+      const armGeo = new THREE.CylinderGeometry(0.24, 0.24, 4.6, 8);
+      const armMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, metalness: 0.9, roughness: 0.3 });
+      const arm = new THREE.Mesh(armGeo, armMat);
+      arm.rotation.z = Math.PI / 2;
+      arm.rotation.y = Math.atan2(pos.z, pos.x);
+      arm.position.set(pos.x * 0.5, 0, pos.z * 0.5);
+      aerialDrone.add(arm);
+
+      // Motor hub
+      const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.65, 0.65, 0.7, 12), droneBodyMat);
+      hub.position.set(pos.x, 0.2, pos.z);
+      aerialDrone.add(hub);
+
+      // Propeller rotor blade (spins dynamically)
+      const bladeGeo = new THREE.BoxGeometry(6.4, 0.08, 0.65);
+      const bladeMat = new THREE.MeshStandardMaterial({
+        color: 0x38bdf8,
+        transparent: true,
+        opacity: 0.78,
+        roughness: 0.25,
+      });
+      const blade = new THREE.Mesh(bladeGeo, bladeMat);
+      blade.position.set(pos.x, 0.62, pos.z);
+      aerialDrone.add(blade);
+      rotors.push(blade);
+
+      // Wingtip LED
+      const led = new THREE.Mesh(
+        new THREE.SphereGeometry(0.25, 8, 8),
+        new THREE.MeshBasicMaterial({ color: pos.led }),
+      );
+      led.position.set(pos.x, 0.75, pos.z);
+      aerialDrone.add(led);
+    });
+
+    // Underslung camera gimbal pod
+    const gimbal = new THREE.Mesh(
+      new THREE.SphereGeometry(1.2, 16, 12),
+      new THREE.MeshStandardMaterial({ color: 0x020617, roughness: 0.3, metalness: 0.8 }),
+    );
+    gimbal.position.set(0, -0.9, 1.2);
+    aerialDrone.add(gimbal);
+
+    // Glowing cyan camera optical sensor
+    const lens = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.5, 0.5, 0.35, 16),
+      new THREE.MeshBasicMaterial({ color: 0x38bdf8 }),
+    );
+    lens.rotation.x = Math.PI / 2;
+    lens.position.set(0, -0.9, 2.2);
+    aerialDrone.add(lens);
+
+    // Directional Pointer Beam (Targeting guide beam emanating toward target)
+    const pointerBeamGeo = new THREE.CylinderGeometry(0.12, 0.55, 1, 10);
+    pointerBeamGeo.translate(0, 0.5, 0); // anchor top at gimbal
+    pointerBeamGeo.rotateX(Math.PI / 2); // point forward toward +Z
+    const pointerBeamMat = new THREE.MeshBasicMaterial({
+      color: 0x38bdf8,
+      transparent: true,
+      opacity: 0.42,
+      depthWrite: false,
+    });
+    const pointerBeam = new THREE.Mesh(pointerBeamGeo, pointerBeamMat);
+    pointerBeam.position.set(0, -0.9, 2.2);
+    aerialDrone.add(pointerBeam);
+
+    scene.add(aerialDrone);
+
+    // Target reticle ring on target point
+    const reticleGeo = new THREE.RingGeometry(2.4, 3.2, 32);
+    reticleGeo.rotateX(-Math.PI / 2);
+    const targetReticle = new THREE.Mesh(
+      reticleGeo,
+      new THREE.MeshBasicMaterial({
+        color: 0x38bdf8,
+        transparent: true,
+        opacity: 0.55,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      }),
+    );
+    scene.add(targetReticle);
 
     // Cockpit for POV camera (first-person view)
     const cockpit = new THREE.Group();
@@ -334,18 +522,106 @@ export default function Ride3D({ built, simRef, theme, material = 'metal', camMo
       sceneryGroup,
       ground,
       sun,
+      hemi,
+      fillLight,
+      skyMat,
       cockpit,
       cars,
       carMat,
       chassisMat,
       seatMat,
       chromeMat,
+      headlights,
+      rainPoints,
+      rainPositions,
+      rainVelocities,
+      aerialDrone,
+      pointerBeam,
+      targetReticle,
+      rotors,
       camPos: new THREE.Vector3(0, 40, 120),
       camQuat: new THREE.Quaternion(),
+      aerialAzimuth: 0.85,
+      aerialElevation: 0.45,
+      aerialDist: 260,
+      aerialTarget: new THREE.Vector3(0, 30, 0),
       fov: 66,
-      orbit: 0,
       ready: true,
     };
+
+    // ================================================================
+    // POINTER CONTROLS (Movable Aerial Drone with Pointer - No Auto-Spin)
+    // ================================================================
+    let isDragging = false;
+    let isPanning = false;
+    let lastX = 0;
+    let lastY = 0;
+
+    const onPointerDown = (e: PointerEvent) => {
+      if (propsRef.current.camMode !== 'orbit') return;
+      isDragging = true;
+      isPanning = e.button === 2 || e.shiftKey;
+      lastX = e.clientX;
+      lastY = e.clientY;
+      try {
+        renderer.domElement.setPointerCapture(e.pointerId);
+      } catch {}
+      renderer.domElement.style.cursor = 'grabbing';
+    };
+
+    const onPointerMove = (e: PointerEvent) => {
+      if (!isDragging) return;
+      const dx = e.clientX - lastX;
+      const dy = e.clientY - lastY;
+      lastX = e.clientX;
+      lastY = e.clientY;
+
+      const st = stateRef.current;
+      if (!st) return;
+
+      if (isPanning) {
+        // Pan aerial target on ground plane
+        const forward = new THREE.Vector3();
+        st.camera.getWorldDirection(forward);
+        forward.y = 0;
+        forward.normalize();
+        const right = new THREE.Vector3().crossVectors(forward, new THREE.Vector3(0, 1, 0)).normalize();
+        const panSpeed = st.aerialDist * 0.0018;
+        st.aerialTarget.addScaledVector(right, -dx * panSpeed);
+        st.aerialTarget.addScaledVector(forward, dy * panSpeed);
+      } else {
+        // Rotate aerial azimuth & elevation with precision pointer
+        st.aerialAzimuth -= dx * 0.006;
+        st.aerialElevation = Math.max(0.06, Math.min(1.46, st.aerialElevation + dy * 0.005));
+      }
+    };
+
+    const onPointerUp = (e: PointerEvent) => {
+      isDragging = false;
+      try {
+        renderer.domElement.releasePointerCapture(e.pointerId);
+      } catch {}
+      renderer.domElement.style.cursor = propsRef.current.camMode === 'orbit' ? 'grab' : 'default';
+    };
+
+    const onWheel = (e: WheelEvent) => {
+      if (propsRef.current.camMode !== 'orbit') return;
+      const st = stateRef.current;
+      if (!st) return;
+      e.preventDefault();
+      st.aerialDist = Math.max(30, Math.min(3200, st.aerialDist * (1 + e.deltaY * 0.0012)));
+    };
+
+    const onContextMenu = (e: MouseEvent) => {
+      if (propsRef.current.camMode === 'orbit') e.preventDefault();
+    };
+
+    renderer.domElement.addEventListener('pointerdown', onPointerDown);
+    renderer.domElement.addEventListener('pointermove', onPointerMove);
+    renderer.domElement.addEventListener('pointerup', onPointerUp);
+    renderer.domElement.addEventListener('pointercancel', onPointerUp);
+    renderer.domElement.addEventListener('wheel', onWheel, { passive: false });
+    renderer.domElement.addEventListener('contextmenu', onContextMenu);
 
     const ro = new ResizeObserver(() => {
       const w = wrap.clientWidth || 1;
@@ -358,6 +634,12 @@ export default function Ride3D({ built, simRef, theme, material = 'metal', camMo
 
     return () => {
       ro.disconnect();
+      renderer.domElement.removeEventListener('pointerdown', onPointerDown);
+      renderer.domElement.removeEventListener('pointermove', onPointerMove);
+      renderer.domElement.removeEventListener('pointerup', onPointerUp);
+      renderer.domElement.removeEventListener('pointercancel', onPointerUp);
+      renderer.domElement.removeEventListener('wheel', onWheel);
+      renderer.domElement.removeEventListener('contextmenu', onContextMenu);
       renderer.dispose();
       if (renderer.domElement.parentElement === wrap) wrap.removeChild(renderer.domElement);
       stateRef.current = null;
@@ -959,6 +1241,9 @@ export default function Ride3D({ built, simRef, theme, material = 'metal', camMo
     const q2 = new THREE.Quaternion();
     const lookM = new THREE.Matrix4();
 
+    let lightningTimer = 6;
+    let lightningFlash = 0;
+
     const loop = () => {
       raf = requestAnimationFrame(loop);
       const st = stateRef.current;
@@ -966,11 +1251,130 @@ export default function Ride3D({ built, simRef, theme, material = 'metal', camMo
       const now = performance.now();
       const dt = Math.min(0.1, (now - last) / 1000);
       last = now;
-      const { built: bt, simRef: sr, camMode: mode } = propsRef.current;
+      const { built: bt, simRef: sr, camMode: mode, weather = 'day' } = propsRef.current;
       const sim = sr.current;
       if (bt.samples.length < 4) {
         st.renderer.render(st.scene, st.camera);
         return;
+      }
+
+      // ------------------------------------------------------------- Weather & Lighting
+      if (weather === 'sunset') {
+        st.skyMat.uniforms.top.value.set('#2c1654');
+        st.skyMat.uniforms.mid.value.set('#ea580c');
+        st.skyMat.uniforms.bottom.value.set('#fed7aa');
+        (st.scene.fog as THREE.Fog).color.set(0xfb923c);
+        (st.scene.fog as THREE.Fog).near = 500;
+        (st.scene.fog as THREE.Fog).far = 3200;
+        st.sun.color.set(0xf97316);
+        st.sun.intensity = 2.8;
+        st.sun.position.set(620, 180, 220);
+        st.hemi.color.set(0xfb923c);
+        st.hemi.groundColor.set(0x451a03);
+        st.hemi.intensity = 0.95;
+        st.fillLight.color.set(0xbe185d);
+        st.fillLight.intensity = 0.75;
+        st.renderer.toneMappingExposure = 1.12;
+        st.headlights.forEach((hl) => {
+          hl.intensity = 1.4;
+        });
+        st.rainPoints.visible = false;
+      } else if (weather === 'night') {
+        st.skyMat.uniforms.top.value.set('#020617');
+        st.skyMat.uniforms.mid.value.set('#0f172a');
+        st.skyMat.uniforms.bottom.value.set('#1e1b4b');
+        (st.scene.fog as THREE.Fog).color.set(0x0a0f1d);
+        (st.scene.fog as THREE.Fog).near = 380;
+        (st.scene.fog as THREE.Fog).far = 2200;
+        st.sun.color.set(0x93c5fd);
+        st.sun.intensity = 0.45;
+        st.sun.position.set(200, 520, 160);
+        st.hemi.color.set(0x1e293b);
+        st.hemi.groundColor.set(0x020617);
+        st.hemi.intensity = 0.30;
+        st.fillLight.color.set(0x6366f1);
+        st.fillLight.intensity = 0.35;
+        st.renderer.toneMappingExposure = 1.25;
+        st.headlights.forEach((hl) => {
+          hl.intensity = 4.2;
+        });
+        st.rainPoints.visible = false;
+      } else if (weather === 'storm') {
+        st.skyMat.uniforms.top.value.set('#1e293b');
+        st.skyMat.uniforms.mid.value.set('#334155');
+        st.skyMat.uniforms.bottom.value.set('#475569');
+        (st.scene.fog as THREE.Fog).color.set(0x334155);
+        (st.scene.fog as THREE.Fog).near = 220;
+        (st.scene.fog as THREE.Fog).far = 1700;
+        st.sun.color.set(0x94a3b8);
+        st.sun.position.set(120, 480, 120);
+        st.hemi.color.set(0x475569);
+        st.hemi.groundColor.set(0x1e293b);
+        st.hemi.intensity = 0.65;
+        st.fillLight.color.set(0x64748b);
+        st.fillLight.intensity = 0.30;
+        st.renderer.toneMappingExposure = 0.95;
+        st.headlights.forEach((hl) => {
+          hl.intensity = 4.5;
+        });
+
+        // Lightning flash effect
+        lightningTimer -= dt;
+        if (lightningTimer <= 0) {
+          lightningFlash = 0.12;
+          lightningTimer = 7 + Math.random() * 8;
+        }
+        if (lightningFlash > 0) {
+          lightningFlash -= dt;
+          st.sun.intensity = 4.6;
+          st.renderer.toneMappingExposure = 1.45;
+        } else {
+          st.sun.intensity = 0.70;
+          st.renderer.toneMappingExposure = 0.95;
+        }
+
+        // Dynamic falling rain particles with wind tilt
+        st.rainPoints.visible = true;
+        const pos = st.rainPositions;
+        const vel = st.rainVelocities;
+        const n = vel.length;
+        const gY = bt.groundY;
+        for (let i = 0; i < n; i++) {
+          pos[i * 3 + 1] -= vel[i] * dt;
+          pos[i * 3] -= 32 * dt; // wind drift
+          if (pos[i * 3 + 1] < gY) {
+            pos[i * 3 + 1] = gY + 450 + Math.random() * 100;
+            pos[i * 3] = (Math.random() - 0.5) * 1400;
+            pos[i * 3 + 2] = (Math.random() - 0.5) * 1400;
+          }
+        }
+        st.rainPoints.geometry.attributes.position.needsUpdate = true;
+      } else {
+        // Crisp sunny daytime
+        st.skyMat.uniforms.top.value.set('#1e6fd8');
+        st.skyMat.uniforms.mid.value.set('#85bff5');
+        st.skyMat.uniforms.bottom.value.set('#e0f0fe');
+        (st.scene.fog as THREE.Fog).color.set(0xcfe8ff);
+        (st.scene.fog as THREE.Fog).near = 650;
+        (st.scene.fog as THREE.Fog).far = 3600;
+        st.sun.color.set(0xfffaee);
+        st.sun.intensity = 2.2;
+        st.sun.position.set(360, 620, 240);
+        st.hemi.color.set(0xcfe6fe);
+        st.hemi.groundColor.set(0x274314);
+        st.hemi.intensity = 1.15;
+        st.fillLight.color.set(0x93c5fd);
+        st.fillLight.intensity = 0.65;
+        st.renderer.toneMappingExposure = 1.08;
+        st.headlights.forEach((hl) => {
+          hl.intensity = 0;
+        });
+        st.rainPoints.visible = false;
+      }
+
+      // Animate quadcopter rotors dynamically
+      for (let i = 0; i < st.rotors.length; i++) {
+        st.rotors[i].rotation.y += dt * 55;
       }
 
       frameAt(bt, Math.min(sim.s, bt.length - 0.1), f);
@@ -1040,6 +1444,18 @@ export default function Ride3D({ built, simRef, theme, material = 'metal', camMo
         const speedRatio = Math.min(1.2, sim.speed / 85);
         const fovTarget = 64 + speedRatio * 20; // 64 deg at rest -> 84+ deg at high speed
         st.fov += (fovTarget - st.fov) * Math.min(1, dt * 6);
+
+        // In POV mode, the aerial 3D drone hovers overhead tracking the train with its laser pointer beam
+        st.aerialDrone.visible = true;
+        st.targetReticle.visible = false;
+        const droneOverhead = new THREE.Vector3(f.px + 40, f.py + 75, f.pz + 40);
+        st.aerialDrone.position.lerp(droneOverhead, 1 - Math.exp(-dt * 4));
+        lookM.lookAt(st.aerialDrone.position, new THREE.Vector3(f.px, f.py, f.pz), new THREE.Vector3(0, 1, 0));
+        q.setFromRotationMatrix(lookM);
+        st.aerialDrone.quaternion.slerp(q, 1 - Math.exp(-dt * 6));
+        const distToTrain = st.aerialDrone.position.distanceTo(new THREE.Vector3(f.px, f.py, f.pz));
+        st.pointerBeam.scale.set(1, 1, distToTrain);
+        st.pointerBeam.visible = true;
       } else if (mode === 'chase') {
         // Chase camera positioned behind the car along the track frame
         const speedRatio = Math.min(1.2, sim.speed / 85);
@@ -1063,24 +1479,72 @@ export default function Ride3D({ built, simRef, theme, material = 'metal', camMo
         st.camera.quaternion.copy(st.camQuat);
         const fovTarget = 60 + speedRatio * 8;
         st.fov += (fovTarget - st.fov) * Math.min(1, dt * 4);
-      } else {
-        // Aerial orbit
-        st.orbit += dt * 0.09;
-        const r = bt.radius3 * 1.9 + 160;
-        const cx = bt.center3.x;
-        const cz = bt.center3.z;
-        target.set(
-          cx + Math.cos(st.orbit) * r,
-          bt.maxHeight * 0.9 + 110,
-          cz + Math.sin(st.orbit) * r,
-        );
-        st.camPos.lerp(target, 1 - Math.exp(-dt * 6));
-        st.camera.position.copy(st.camPos);
-        lookM.lookAt(st.camPos, new THREE.Vector3(cx, bt.maxHeight * 0.35, cz), new THREE.Vector3(0, 1, 0));
+
+        // In Chase mode, aerial drone hovers overhead tracking the train
+        st.aerialDrone.visible = true;
+        st.targetReticle.visible = false;
+        const droneOverhead = new THREE.Vector3(f.px + 35, f.py + 70, f.pz + 35);
+        st.aerialDrone.position.lerp(droneOverhead, 1 - Math.exp(-dt * 4));
+        lookM.lookAt(st.aerialDrone.position, new THREE.Vector3(f.px, f.py, f.pz), new THREE.Vector3(0, 1, 0));
         q.setFromRotationMatrix(lookM);
-        st.camQuat.slerp(q, 1 - Math.exp(-dt * 8));
+        st.aerialDrone.quaternion.slerp(q, 1 - Math.exp(-dt * 6));
+        const distToTrain = st.aerialDrone.position.distanceTo(new THREE.Vector3(f.px, f.py, f.pz));
+        st.pointerBeam.scale.set(1, 1, distToTrain);
+        st.pointerBeam.visible = true;
+      } else {
+        // =============================================================
+        // Aerial Mode: Movable 3D Model with Pointer (NO AUTO-SPIN)
+        // =============================================================
+        const targetPos = new THREE.Vector3();
+        if (propsRef.current.aerialFollow) {
+          targetPos.set(f.px, f.py, f.pz);
+          st.aerialTarget.lerp(targetPos, 1 - Math.exp(-dt * 6));
+        } else {
+          targetPos.copy(st.aerialTarget);
+        }
+
+        // Calculate drone position from user pointer azimuth, elevation, and distance
+        const cosEl = Math.cos(st.aerialElevation);
+        const sinEl = Math.sin(st.aerialElevation);
+        const droneX = targetPos.x + Math.sin(st.aerialAzimuth) * cosEl * st.aerialDist;
+        const droneY = targetPos.y + sinEl * st.aerialDist;
+        const droneZ = targetPos.z + Math.cos(st.aerialAzimuth) * cosEl * st.aerialDist;
+        const dronePos = new THREE.Vector3(droneX, Math.max(bt.groundY + 8, droneY), droneZ);
+
+        // Position and orient the Movable 3D Aerial Drone Model
+        st.aerialDrone.visible = true;
+        st.aerialDrone.position.copy(dronePos);
+
+        lookM.lookAt(dronePos, targetPos, new THREE.Vector3(0, 1, 0));
+        q.setFromRotationMatrix(lookM);
+        st.aerialDrone.quaternion.copy(q);
+
+        // Directional pointer beam points accurately from drone to target
+        const distToTarget = dronePos.distanceTo(targetPos);
+        st.pointerBeam.scale.set(1, 1, distToTarget);
+        st.pointerBeam.visible = true;
+
+        // Ground reticle target ring
+        st.targetReticle.position.set(targetPos.x, targetPos.y + 0.6, targetPos.z);
+        st.targetReticle.visible = true;
+
+        // Position camera behind and elevated from the movable 3D aerial model,
+        // giving a pristine view of the 3D craft and its directional pointer beam navigating the scene
+        const droneForward = new THREE.Vector3(0, 0, -1).applyQuaternion(q);
+        const droneUp = new THREE.Vector3(0, 1, 0).applyQuaternion(q);
+        target.copy(dronePos)
+          .addScaledVector(droneForward, -22)
+          .addScaledVector(droneUp, 9);
+        target.y = Math.max(target.y, bt.groundY + 6);
+
+        st.camPos.lerp(target, 1 - Math.exp(-dt * 14));
+        st.camera.position.copy(st.camPos);
+
+        lookM.lookAt(st.camPos, targetPos, new THREE.Vector3(0, 1, 0));
+        q.setFromRotationMatrix(lookM);
+        st.camQuat.slerp(q, 1 - Math.exp(-dt * 14));
         st.camera.quaternion.copy(st.camQuat);
-        st.fov += (55 - st.fov) * Math.min(1, dt * 3);
+        st.fov += (58 - st.fov) * Math.min(1, dt * 4);
       }
 
       if (Math.abs(st.camera.fov - st.fov) > 0.05) {
