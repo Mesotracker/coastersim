@@ -296,6 +296,7 @@ export default function HUD({
             maxSpeed={hud.maxSpeed}
             airtime={hud.airtime}
             compact={true}
+            onScrub={onSeek}
           />
         </div>
       )}

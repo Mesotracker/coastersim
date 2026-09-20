@@ -9,6 +9,9 @@ interface Props {
   maxSpeed: number;
   airtime: number;
   compact?: boolean;
+  onScrub?: (progress: number) => void;
+  stalled?: boolean;
+  totalDuration?: number;
 }
 
 export default function SpeedGraph({
@@ -18,6 +21,9 @@ export default function SpeedGraph({
   maxSpeed,
   airtime,
   compact = false,
+  onScrub,
+  stalled = false,
+  totalDuration,
 }: Props) {
   const [hoverIndex, setHoverIndex] = useState<number | null>(null);
   const [exporting, setExporting] = useState<string | null>(null);
@@ -225,8 +231,31 @@ export default function SpeedGraph({
     return ticks;
   }, [maxT]);
 
-  // Hovered point data
   const hoveredPoint = hoverIndex !== null && telemetry[hoverIndex] ? telemetry[hoverIndex] : null;
+
+  const handlePointerDown = (e: React.PointerEvent<SVGSVGElement>) => {
+    if (!onScrub || telemetry.length === 0) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const svgX = ((e.clientX - rect.left) / rect.width) * width;
+    const clampedX = Math.max(padLeft, Math.min(width - padRight, svgX));
+    const targetT = ((clampedX - padLeft) / chartW) * maxT;
+
+    let bestI = 0;
+    let bestDist = Infinity;
+    for (let i = 0; i < telemetry.length; i++) {
+      const dist = Math.abs(telemetry[i].t - targetT);
+      if (dist < bestDist) {
+        bestDist = dist;
+        bestI = i;
+      }
+    }
+    const pt = telemetry[bestI];
+    if (pt) {
+      const maxS = telemetry[telemetry.length - 1]?.s || 1;
+      onScrub(Math.max(0, Math.min(1, pt.s / maxS)));
+    }
+    (e.target as Element).setPointerCapture?.(e.pointerId);
+  };
 
   const handlePointerMove = (e: React.PointerEvent<SVGSVGElement>) => {
     if (telemetry.length === 0) return;
@@ -246,6 +275,14 @@ export default function SpeedGraph({
       }
     }
     setHoverIndex(bestI);
+
+    if (e.buttons === 1 && onScrub) {
+      const pt = telemetry[bestI];
+      if (pt) {
+        const maxS = telemetry[telemetry.length - 1]?.s || 1;
+        onScrub(Math.max(0, Math.min(1, pt.s / maxS)));
+      }
+    }
   };
 
   return (
@@ -280,10 +317,17 @@ export default function SpeedGraph({
 
       {/* SVG Chart */}
       <div className="relative overflow-hidden rounded-xl border border-slate-200 bg-white shadow-inner">
+        {stalled && (
+          <div className="absolute top-2 right-2 z-10 rounded-lg bg-rose-50 px-2 py-0.5 text-[10px] font-bold text-rose-600 ring-1 ring-rose-200 shadow-xs flex items-center gap-1">
+            <span>⚠️</span>
+            <span>Train Stalled (Needs more height / booster)</span>
+          </div>
+        )}
         <svg
           ref={svgRef}
           viewBox={`0 0 ${width} ${height}`}
           className="w-full h-auto block cursor-crosshair touch-none"
+          onPointerDown={handlePointerDown}
           onPointerMove={handlePointerMove}
           onPointerLeave={() => setHoverIndex(null)}
         >
@@ -482,9 +526,19 @@ export default function SpeedGraph({
 
       <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 pt-2 px-0.5 text-[11px]">
         <div className="flex items-center gap-1.5 text-slate-500 text-[10px]">
-          <span>Hover curve for data</span>
+          <span className="font-semibold text-blue-600">Full Ride Ahead of Time</span>
+          <span className="font-mono text-slate-400">·</span>
+          <span>Click/drag to scrub</span>
           <span className="font-mono text-slate-400">·</span>
           <span className="font-mono font-medium text-slate-600">{telemetry.length} samples</span>
+          {totalDuration !== undefined && totalDuration > 0 && (
+            <>
+              <span className="font-mono text-slate-400">·</span>
+              <span className="font-mono font-semibold text-slate-700">
+                {totalDuration.toFixed(1)}s ride
+              </span>
+            </>
+          )}
           {exporting && (
             <span className="ml-1 animate-pulse rounded-md bg-blue-50 px-1.5 py-0.5 font-sans font-bold text-blue-600">
               {exporting}

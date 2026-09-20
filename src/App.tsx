@@ -32,7 +32,15 @@ import {
   defaultTrack,
   newPiece,
 } from './lib/track';
-import { DEFAULT_SETTINGS, SimSettings, makeSim, resetSim, stepSim, seekSim } from './lib/physics';
+import {
+  DEFAULT_SETTINGS,
+  SimSettings,
+  makeSim,
+  resetSim,
+  stepSim,
+  seekSim,
+  precomputeFullRideTelemetry,
+} from './lib/physics';
 import { THEMES, Theme } from './lib/themes';
 
 type Tab = 'piece' | 'physics' | 'telemetry' | 'style';
@@ -139,6 +147,14 @@ export default function App() {
 
   const built = useMemo(() => buildTrack(track), [track]);
 
+  // Precompute entire ride speed profile and full telemetry ahead of time
+  const precomputedRide = useMemo(
+    () => precomputeFullRideTelemetry(built, settings),
+    [built, settings],
+  );
+  const precomputedRideRef = useRef(precomputedRide);
+  precomputedRideRef.current = precomputedRide;
+
   const simRef = useRef(makeSim());
   const builtRef = useRef(built);
   builtRef.current = built;
@@ -182,6 +198,7 @@ export default function App() {
       if (acc > 0.033) {
         acc = 0;
         const s = simRef.current;
+        const pre = precomputedRideRef.current;
         setHud({
           speed: s.speed,
           g: s.g,
@@ -189,14 +206,17 @@ export default function App() {
           height: s.height,
           airtime: s.airtime,
           runTime: s.runTime,
-          maxSpeed: s.maxSpeed,
-          maxG: s.maxG,
+          maxSpeed: Math.max(s.maxSpeed, pre?.maxSpeed ?? 0),
+          maxG: Math.max(s.maxG, pre?.maxG ?? 1),
           progress: builtRef.current.length > 0 ? s.s / builtRef.current.length : 0,
           phase: s.phase,
           event: s.event,
           eventT: s.eventT,
           laps: s.laps,
-          telemetry: s.telemetry.slice(-300), // pass fresh telemetry slice for reactive graph
+          telemetry:
+            pre && pre.telemetry.length > 0
+              ? pre.telemetry
+              : s.telemetry.slice(-300),
         });
       }
     };
@@ -951,11 +971,18 @@ export default function App() {
 
               {tab === 'telemetry' && (
                 <SpeedGraph
-                  telemetry={hud.telemetry}
+                  telemetry={
+                    precomputedRide.telemetry.length > 0
+                      ? precomputedRide.telemetry
+                      : hud.telemetry
+                  }
                   currentTime={hud.runTime}
                   currentSpeed={hud.speed}
-                  maxSpeed={hud.maxSpeed}
-                  airtime={hud.airtime}
+                  maxSpeed={Math.max(hud.maxSpeed, precomputedRide.maxSpeed)}
+                  airtime={Math.max(hud.airtime, precomputedRide.airtime)}
+                  onScrub={handleSeek}
+                  stalled={precomputedRide.stalled}
+                  totalDuration={precomputedRide.totalDuration}
                 />
               )}
 

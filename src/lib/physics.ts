@@ -102,7 +102,180 @@ export function resetSim(st: SimState) {
 const f: Frame = makeFrame();
 
 /**
- * Scrub / Seek the simulation to a specific track position `targetS`.
+ * Precomputes the entire ride speed profile and telemetry ahead of time.
+ * Runs deterministic simulation along the built track from station rollout to final brake run.
+ */
+export function precomputeFullRideTelemetry(
+  track: BuiltTrack,
+  cfg: SimSettings,
+): {
+  telemetry: TelemetryPoint[];
+  maxSpeed: number;
+  maxG: number;
+  totalDuration: number;
+  airtime: number;
+  stalled: boolean;
+} {
+  if (!track || track.length < 8) {
+    return {
+      telemetry: [],
+      maxSpeed: 0,
+      maxG: 1,
+      totalDuration: 0,
+      airtime: 0,
+      stalled: false,
+    };
+  }
+
+  const g = GRAVITY * cfg.gravity;
+  const tempF: Frame = makeFrame();
+  const pts: TelemetryPoint[] = [];
+
+  let s = 0;
+  let v = 1.5; // Initial station dispatch speed (m/s)
+  let runTime = 0;
+  let maxSpeed = 0;
+  let maxG = 1;
+  let airtime = 0;
+  let lastSampleT = -1;
+  let stallTimer = 0;
+  let stalled = false;
+
+  const dt = 1 / 120; // 120Hz high-precision integration step
+  const maxSimSteps = 120 * 300; // max 5 minutes simulation cap
+  let step = 0;
+
+  // Initial station point
+  frameAt(track, 0, tempF);
+  const startH = Math.max(0, (tempF.y - track.groundY) * FEET_PER_UNIT);
+  pts.push({
+    t: 0,
+    speed: Math.round(v * MPH_PER_MPS * 10) / 10,
+    g: 1,
+    height: Math.round(startH),
+    s: 0,
+  });
+
+  const getAccel = (posS: number, velV: number): number => {
+    frameAt(track, posS, tempF);
+    const sinP = Math.sin(tempF.pitch);
+    const cosP = Math.cos(tempF.pitch);
+
+    let accel = -g * sinP;
+    accel -= cfg.drag * velV * Math.abs(velV);
+
+    const kappaM = tempF.kappa / METERS_PER_UNIT;
+    const yawRateM = tempF.yawRate / METERS_PER_UNIT;
+    const vv = velV * velV;
+    const aNormVert = g * cosP + vv * kappaM;
+    const aNormLat = vv * yawRateM;
+    const aNormTotal = Math.sqrt(aNormVert * aNormVert + aNormLat * aNormLat);
+
+    if (Math.abs(velV) > 0.04) {
+      if (tempF.special !== 3) {
+        const effLoad = Math.max(g * 0.2, aNormTotal);
+        const matMult = cfg.material === 'wood' ? 1.45 : cfg.material === 'plastic' ? 0.9 : 1.0;
+        accel -= cfg.friction * matMult * effLoad * Math.sign(velV);
+      }
+    }
+
+    if (tempF.special === 1) {
+      // Trim brakes
+      if (velV > 5.5) accel -= cfg.brakeForce;
+    } else if (tempF.special === 2 && velV > -0.5) {
+      // Boost
+      accel += cfg.boostForce;
+    }
+
+    if (posS < STATION_LEN * 0.75 && velV < cfg.launch) {
+      accel += Math.max(0, (cfg.launch - velV) * 3.8);
+    }
+
+    if (posS < track.liftEnd && velV < cfg.liftSpeed) {
+      accel = Math.max(accel, (cfg.liftSpeed - velV) * 4.5);
+    }
+
+    return accel;
+  };
+
+  while (s < track.length && step < maxSimSteps) {
+    step++;
+    runTime += dt;
+
+    // Midpoint Runge-Kutta
+    const a1 = getAccel(s, v);
+    const midS = Math.max(0, Math.min(track.length, s + (0.5 * v * dt) / METERS_PER_UNIT));
+    const midV = v + 0.5 * a1 * dt;
+    const a2 = getAccel(midS, midV);
+
+    if (s < track.liftEnd && v < cfg.liftSpeed && a2 < 0) {
+      v = Math.min(cfg.liftSpeed, v + 8 * dt);
+    } else {
+      v += a2 * dt;
+    }
+
+    v = Math.max(-250, Math.min(800, v));
+    s += (v * dt) / METERS_PER_UNIT;
+
+    if (s <= 0) {
+      s = 0;
+      if (v < -0.5) {
+        stalled = true;
+        break;
+      }
+      v = Math.max(v, 0.8);
+    }
+
+    if (Math.abs(v) < 0.25 && s > track.liftEnd) {
+      stallTimer += dt;
+      if (stallTimer > 2.0) {
+        stalled = true;
+        break;
+      }
+    } else {
+      stallTimer = 0;
+    }
+
+    frameAt(track, Math.min(track.length, s), tempF);
+    const kappaM = tempF.kappa / METERS_PER_UNIT;
+    const yawRateM = tempF.yawRate / METERS_PER_UNIT;
+    const vv = v * v;
+    const aNormVert = g * Math.cos(tempF.pitch) + vv * kappaM;
+    const aNormLat = vv * yawRateM;
+    const cosB = Math.cos(tempF.bank);
+    const sinB = Math.sin(tempF.bank);
+    const vertG = (aNormVert * cosB + aNormLat * sinB) / g;
+    const spd = Math.abs(v) * MPH_PER_MPS;
+    const heightFt = Math.max(0, (tempF.y - track.groundY) * FEET_PER_UNIT);
+
+    if (spd > maxSpeed) maxSpeed = spd;
+    if (vertG > maxG) maxG = vertG;
+    if (tempF.special === 3 || vertG < 0.2) airtime += dt;
+
+    // Record telemetry point every 0.08s (~12.5 Hz sample rate)
+    if (runTime - lastSampleT >= 0.08 || s >= track.length) {
+      lastSampleT = runTime;
+      pts.push({
+        t: Math.round(runTime * 100) / 100,
+        speed: Math.round(spd * 10) / 10,
+        g: Math.round(vertG * 100) / 100,
+        height: Math.round(heightFt),
+        s: Math.round(s),
+      });
+    }
+  }
+
+  return {
+    telemetry: pts,
+    maxSpeed,
+    maxG,
+    totalDuration: runTime,
+    airtime,
+    stalled,
+  };
+}
+
+/**
  * Instantly synchronizes coaster train position, velocity estimate, height, and G-forces.
  */
 export function seekSim(st: SimState, track: BuiltTrack, targetS: number, cfg?: SimSettings) {
