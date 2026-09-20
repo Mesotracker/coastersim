@@ -1,4 +1,5 @@
-import { useMemo, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
+import { Download, FileText, Image as ImageIcon } from 'lucide-react';
 import { TelemetryPoint } from '../lib/physics';
 
 interface Props {
@@ -19,6 +20,8 @@ export default function SpeedGraph({
   compact = false,
 }: Props) {
   const [hoverIndex, setHoverIndex] = useState<number | null>(null);
+  const [exporting, setExporting] = useState<string | null>(null);
+  const svgRef = useRef<SVGSVGElement>(null);
 
   // Derive metrics
   const avgSpeed = useMemo(() => {
@@ -35,6 +38,128 @@ export default function SpeedGraph({
     }
     return maxP;
   }, [telemetry]);
+
+  // Export telemetry as CSV file
+  const handleDownloadCSV = useCallback(() => {
+    const rows = [
+      ['Time (s)', 'Speed (mph)', 'G-Force (g)', 'Elevation (ft)', 'Track Distance (m)'],
+    ];
+
+    if (telemetry.length === 0) {
+      // Provide single row with current telemetry point
+      rows.push([
+        currentTime.toFixed(2),
+        currentSpeed.toFixed(1),
+        '1.00',
+        '0',
+        '0',
+      ]);
+    } else {
+      for (const pt of telemetry) {
+        rows.push([
+          pt.t.toFixed(2),
+          pt.speed.toFixed(1),
+          pt.g.toFixed(2),
+          pt.height.toString(),
+          pt.s.toString(),
+        ]);
+      }
+    }
+
+    const csvContent = rows.map((r) => r.join(',')).join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.setAttribute('download', `coaster-speed-telemetry-${new Date().toISOString().slice(0, 10)}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+    setExporting('CSV exported!');
+    setTimeout(() => setExporting(null), 2200);
+  }, [telemetry, currentTime, currentSpeed]);
+
+  // Export graph as high-resolution PNG image
+  const handleDownloadPNG = useCallback(() => {
+    const svgEl = svgRef.current;
+    if (!svgEl) return;
+
+    try {
+      setExporting('Rendering PNG…');
+      // Create high-res canvas (1200 x 640)
+      const exportWidth = 1200;
+      const exportHeight = 640;
+      const canvas = document.createElement('canvas');
+      canvas.width = exportWidth;
+      canvas.height = exportHeight;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+
+      // Dark executive presentation styling
+      ctx.fillStyle = '#0f172a'; // slate-900
+      ctx.fillRect(0, 0, exportWidth, exportHeight);
+
+      // Card container
+      ctx.fillStyle = '#1e293b'; // slate-800
+      ctx.beginPath();
+      ctx.roundRect(30, 30, exportWidth - 60, exportHeight - 60, 16);
+      ctx.fill();
+
+      // Title & Branding
+      ctx.font = 'bold 26px system-ui, -apple-system, sans-serif';
+      ctx.fillStyle = '#f8fafc';
+      ctx.fillText('COASTER FORGE — SPEED & G-FORCE TELEMETRY', 60, 78);
+
+      // Subtitle Stats
+      ctx.font = '15px system-ui, -apple-system, sans-serif';
+      ctx.fillStyle = '#94a3b8';
+      ctx.fillText(
+        `Peak: ${maxSpeed.toFixed(0)} mph  |  Avg: ${avgSpeed.toFixed(0)} mph  |  Airtime: ${airtime.toFixed(1)}s  |  Samples: ${telemetry.length}`,
+        60,
+        106,
+      );
+
+      // Serialize SVG
+      const svgString = new XMLSerializer().serializeToString(svgEl);
+      const svgBlob = new Blob([svgString], { type: 'image/svg+xml;charset=utf-8' });
+      const DOMURL = window.URL || window.webkitURL || window;
+      const url = DOMURL.createObjectURL(svgBlob);
+
+      const img = new Image();
+      img.onload = () => {
+        // Draw the SVG graph inside the canvas container
+        const chartX = 60;
+        const chartY = 130;
+        const chartW = exportWidth - 120;
+        const chartH = exportHeight - 180;
+
+        ctx.drawImage(img, chartX, chartY, chartW, chartH);
+        DOMURL.revokeObjectURL(url);
+
+        // Watermark timestamp
+        ctx.font = '12px monospace';
+        ctx.fillStyle = '#64748b';
+        ctx.fillText(`Exported ${new Date().toLocaleString()}`, exportWidth - 280, exportHeight - 45);
+
+        // Trigger PNG download
+        canvas.toBlob((blob) => {
+          if (!blob) return;
+          const a = document.createElement('a');
+          a.download = `coaster-speed-profile-${new Date().toISOString().slice(0, 10)}.png`;
+          a.href = URL.createObjectURL(blob);
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          setExporting('PNG downloaded!');
+          setTimeout(() => setExporting(null), 2200);
+        }, 'image/png');
+      };
+      img.src = url;
+    } catch {
+      setExporting(null);
+    }
+  }, [maxSpeed, avgSpeed, airtime, telemetry.length]);
 
   // Graph dimensions
   const width = compact ? 340 : 540;
@@ -156,6 +281,7 @@ export default function SpeedGraph({
       {/* SVG Chart */}
       <div className="relative overflow-hidden rounded-xl border border-slate-200 bg-white shadow-inner">
         <svg
+          ref={svgRef}
           viewBox={`0 0 ${width} ${height}`}
           className="w-full h-auto block cursor-crosshair touch-none"
           onPointerMove={handlePointerMove}
@@ -354,11 +480,38 @@ export default function SpeedGraph({
         </svg>
       </div>
 
-      <div className="flex items-center justify-between text-[10px] text-slate-500 px-0.5">
-        <span>Hover curve to inspect timestamp and G-force</span>
-        <span className="font-mono text-[10px] text-slate-600 font-medium">
-          {telemetry.length} data samples
-        </span>
+      <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 pt-2 px-0.5 text-[11px]">
+        <div className="flex items-center gap-1.5 text-slate-500 text-[10px]">
+          <span>Hover curve for data</span>
+          <span className="font-mono text-slate-400">·</span>
+          <span className="font-mono font-medium text-slate-600">{telemetry.length} samples</span>
+          {exporting && (
+            <span className="ml-1 animate-pulse rounded-md bg-blue-50 px-1.5 py-0.5 font-sans font-bold text-blue-600">
+              {exporting}
+            </span>
+          )}
+        </div>
+
+        <div className="flex items-center gap-1.5">
+          <button
+            type="button"
+            onClick={handleDownloadPNG}
+            title="Download high-resolution speed graph image (PNG)"
+            className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2 py-1 text-[11px] font-semibold text-slate-700 shadow-xs transition hover:bg-slate-50 hover:text-slate-900 active:scale-95"
+          >
+            <ImageIcon className="h-3.5 w-3.5 text-sky-600" />
+            <span>Download PNG</span>
+          </button>
+          <button
+            type="button"
+            onClick={handleDownloadCSV}
+            title="Export full telemetry data as CSV table (Excel / Google Sheets)"
+            className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2 py-1 text-[11px] font-semibold text-slate-700 shadow-xs transition hover:bg-slate-50 hover:text-slate-900 active:scale-95"
+          >
+            <FileText className="h-3.5 w-3.5 text-emerald-600" />
+            <span>Export CSV</span>
+          </button>
+        </div>
       </div>
     </div>
   );

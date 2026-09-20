@@ -1,5 +1,7 @@
 import { BuiltTrack, FEET_PER_UNIT, Frame, GRAVITY, METERS_PER_UNIT, MPH_PER_MPS, frameAt, makeFrame } from './track';
 
+export type CoasterMaterial = 'metal' | 'wood' | 'plastic';
+
 export interface SimSettings {
   gravity: number; // multiplier on 9.81
   friction: number; // rolling resistance coefficient
@@ -8,6 +10,7 @@ export interface SimSettings {
   launch: number; // launch speed leaving the station (m/s)
   brakeForce: number; // m/s^2
   boostForce: number; // m/s^2
+  material?: CoasterMaterial;
 }
 
 export const DEFAULT_SETTINGS: SimSettings = {
@@ -18,6 +21,7 @@ export const DEFAULT_SETTINGS: SimSettings = {
   launch: 9, // ~20.1 mph station dispatch drive
   brakeForce: 8.5, // ~0.87 G deceleration
   boostForce: 18, // ~1.84 G linear induction motor boost
+  material: 'metal',
 };
 
 export type Phase = 'station' | 'riding' | 'finished';
@@ -173,9 +177,15 @@ export function stepSim(st: SimState, track: BuiltTrack, dt: number, cfg: SimSet
 
     // Rolling resistance: wheel bearing & polyurethane compression
     if (Math.abs(velV) > 0.04) {
-      // Minimum normal force ensures realistic coasting even at zero-G crest
-      const effLoad = Math.max(g * 0.2, aNormTotal);
-      accel -= cfg.friction * effLoad * Math.sign(velV);
+      // In mid-air jump flight, rolling contact drops to 0!
+      if (f.special === 3) {
+        // Pure ballistic glide
+      } else {
+        // Minimum normal force ensures realistic coasting even at zero-G crest
+        const effLoad = Math.max(g * 0.2, aNormTotal);
+        const matMult = cfg.material === 'wood' ? 1.45 : cfg.material === 'plastic' ? 0.9 : 1.0;
+        accel -= cfg.friction * matMult * effLoad * Math.sign(velV);
+      }
     }
 
     // Special track sections
@@ -271,8 +281,13 @@ export function stepSim(st: SimState, track: BuiltTrack, dt: number, cfg: SimSet
   if (st.speed > st.maxSpeed) st.maxSpeed = st.speed;
   if (st.g > st.maxG) st.maxG = st.g;
 
-  // Airtime detection (< 0.2G)
-  if (st.g < 0.2 && st.phase === 'riding') {
+  // Airtime detection (< 0.2G) & Jump Leap
+  if (f.special === 3 && st.phase === 'riding') {
+    st.airtime += dt;
+    if (st.eventT <= 0.25 || st.event !== 'MID-AIR JUMP! 🚀') {
+      setEvent(st, 'MID-AIR JUMP! 🚀', 1.0);
+    }
+  } else if (st.g < 0.2 && st.phase === 'riding') {
     st.airtime += dt;
     if (st.eventT <= 0 && st.g < 0.05 && st.speed > 16) {
       setEvent(st, 'AIRTIME!', 0.9);
@@ -307,8 +322,11 @@ export function stepSim(st: SimState, track: BuiltTrack, dt: number, cfg: SimSet
   }
 
   // High-frequency harmonic vibration intensity (realistic rail chatter at high speed & load)
+  const matShakeFactor = cfg.material === 'wood' ? 1.65 : cfg.material === 'plastic' ? 0.55 : 1.0;
   const speedRatio = Math.max(0, (st.speed - 25) / 55);
   const gRatio = Math.max(0, Math.abs(st.g - 1) - 1.2) * 0.15;
-  const targetShake = Math.min(1, speedRatio * 0.85 + gRatio);
+  const baseShake = Math.min(1, speedRatio * 0.85 + gRatio) * matShakeFactor;
+  // While airborne in mid-air jump, track contact vibration drops to near-zero!
+  const targetShake = f.special === 3 ? 0.03 : baseShake;
   st.shake += (targetShake - st.shake) * Math.min(1, dt * 5);
 }

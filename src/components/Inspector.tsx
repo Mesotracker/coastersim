@@ -125,6 +125,39 @@ export default function Inspector({
       </div>
 
       <div className="space-y-3">
+        <div className="rounded-lg border border-amber-200 bg-amber-50/70 p-2.5">
+          <div className="flex items-center justify-between">
+            <div>
+              <div className="flex items-center gap-1.5 text-xs font-bold text-amber-900">
+                <span>🚀 Mid-Air Jump</span>
+                <span className="rounded bg-amber-200/80 px-1.5 py-0.5 text-[10px] font-extrabold text-amber-800">
+                  Key: E
+                </span>
+              </div>
+              <p className="mt-0.5 text-[11px] text-amber-700">
+                {piece.kind === 'jump'
+                  ? 'Track gap cut out with ballistic jump launch & receiving hopper.'
+                  : 'Convert this section into a physical jump gap with zero rail friction.'}
+              </p>
+            </div>
+            {piece.kind === 'jump' ? (
+              <button
+                onClick={() => onUpdate(index, { kind: 'straight' })}
+                className="rounded-lg border border-amber-300 bg-white px-2.5 py-1.5 text-xs font-bold text-amber-800 shadow-xs transition hover:bg-amber-100"
+              >
+                Restore Track
+              </button>
+            ) : (
+              <button
+                onClick={() => onUpdate(index, { kind: 'jump' })}
+                className="rounded-lg bg-amber-500 px-3 py-1.5 text-xs font-bold text-white shadow-xs transition hover:bg-amber-600 active:scale-95"
+              >
+                Jump [E]
+              </button>
+            )}
+          </div>
+        </div>
+
         <Slider
           label="Length Factor"
           value={piece.len}

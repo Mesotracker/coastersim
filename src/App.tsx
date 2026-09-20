@@ -103,6 +103,9 @@ export default function App() {
   const [tab, setTab] = useState<Tab>('piece');
   const [layoutMode, setLayoutMode] = useState<LayoutMode>('balanced');
   const [hud, setHud] = useState<HudData>(emptyHud);
+  const [hoveredPiece, setHoveredPiece] = useState<number | null>(null);
+  const hoveredPieceRef = useRef<number | null>(null);
+  hoveredPieceRef.current = hoveredPiece;
   const [importExportOpen, setImportExportOpen] = useState(false);
   const [importExportMode, setImportExportMode] = useState<'export' | 'import'>('export');
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -113,6 +116,19 @@ export default function App() {
       setToastMessage((cur) => (cur === msg ? null : cur));
     }, 3200);
   }, []);
+
+  const handleSelectMaterial = useCallback(
+    (mat: 'metal' | 'wood' | 'plastic') => {
+      const defaultFriction = mat === 'wood' ? 0.012 : mat === 'plastic' ? 0.005 : 0.007;
+      setSettings((prev) => ({
+        ...prev,
+        material: mat,
+        friction: defaultFriction,
+      }));
+      showToast(`Track Material set to ${mat.toUpperCase()} (Friction: ${defaultFriction})`);
+    },
+    [showToast],
+  );
 
   const built = useMemo(() => buildTrack(track), [track]);
 
@@ -347,6 +363,26 @@ export default function App() {
         setFitSignal((f) => f + 1);
       } else if (e.key.toLowerCase() === 'r') {
         restart();
+      } else if (e.key.toLowerCase() === 'e') {
+        // "if key e is hit than make the piece touched into a mid air jump"
+        const target = selected != null ? selected : hoveredPieceRef.current;
+        if (target != null && track.pieces[target]) {
+          e.preventDefault();
+          const p = track.pieces[target];
+          const newKind = p.kind === 'jump' ? 'straight' : 'jump';
+          updatePiece(target, { kind: newKind });
+          setSelected(target);
+          showToast(
+            newKind === 'jump'
+              ? `Piece #${target + 1} transformed into Mid-Air Jump! 🚀`
+              : `Piece #${target + 1} restored to Straight Track`,
+          );
+        } else if (track.pieces.length > 0) {
+          const lastIdx = track.pieces.length - 1;
+          updatePiece(lastIdx, { kind: 'jump' });
+          setSelected(lastIdx);
+          showToast(`Piece #${lastIdx + 1} transformed into Mid-Air Jump! 🚀`);
+        }
       } else if (e.key.toLowerCase() === 'z' && (e.ctrlKey || e.metaKey)) {
         e.preventDefault();
         undo();
@@ -354,7 +390,7 @@ export default function App() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [deletePiece, restart, selected, undo]);
+  }, [deletePiece, restart, selected, showToast, track.pieces, undo, updatePiece]);
 
   // Imperial unit metrics
   const lengthFt = built.length * FEET_PER_UNIT;
@@ -448,6 +484,32 @@ export default function App() {
                 </optgroup>
               ))}
             </select>
+          </div>
+
+          {/* Material Quick Selector */}
+          <div className="flex items-center gap-1 rounded-xl border border-slate-200 bg-white p-0.5 shadow-xs">
+            <span className="px-2 text-[11px] font-bold uppercase tracking-wider text-slate-400">Material</span>
+            {(['metal', 'wood', 'plastic'] as const).map((m) => (
+              <button
+                key={m}
+                onClick={() => handleSelectMaterial(m)}
+                title={`Coaster Material: ${m.toUpperCase()}\n${
+                  m === 'metal'
+                    ? 'Tubular steel, high speed, smooth precision track.'
+                    : m === 'wood'
+                      ? 'Traditional timber coaster, organic track chatter, higher friction.'
+                      : 'Polymer/plastic composite, ultra-smooth glide and vibrant styling.'
+                }`}
+                className={`flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-xs font-bold capitalize transition ${
+                  settings.material === m
+                    ? 'bg-blue-600 text-white shadow-xs'
+                    : 'text-slate-600 hover:bg-slate-100'
+                }`}
+              >
+                <span>{m === 'metal' ? '🔩' : m === 'wood' ? '🪵' : '🧱'}</span>
+                <span>{m}</span>
+              </button>
+            ))}
           </div>
 
           {/* Import / Export JSON Buttons */}
@@ -635,6 +697,7 @@ export default function App() {
                   setSelected(i);
                   if (i != null) setTab('piece');
                 }}
+                onHoverPiece={setHoveredPiece}
                 onChange={handleChange}
                 onInsert={insertPiece}
                 fitSignal={fitSignal}
@@ -673,77 +736,156 @@ export default function App() {
               )}
 
               {tab === 'physics' && (
-                <div className="grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-4">
-                  <MiniSlider
-                    label="Gravity"
-                    value={settings.gravity}
-                    min={0.3}
-                    max={2}
-                    step={0.05}
-                    fmt={(v) => `${v.toFixed(2)}×`}
-                    onChange={(v) => setSettings((s) => ({ ...s, gravity: v }))}
-                  />
-                  <MiniSlider
-                    label="Friction"
-                    value={settings.friction}
-                    min={0}
-                    max={0.03}
-                    step={0.001}
-                    fmt={(v) => v.toFixed(3)}
-                    onChange={(v) => setSettings((s) => ({ ...s, friction: v }))}
-                  />
-                  <MiniSlider
-                    label="Air Drag"
-                    value={settings.drag}
-                    min={0}
-                    max={0.003}
-                    step={0.0001}
-                    fmt={(v) => v.toFixed(4)}
-                    onChange={(v) => setSettings((s) => ({ ...s, drag: v }))}
-                  />
-                  <MiniSlider
-                    label="Launch Speed"
-                    value={settings.launch}
-                    min={0}
-                    max={45}
-                    step={0.5}
-                    fmt={(v) => `${(v * MPH_PER_MPS).toFixed(0)} mph`}
-                    onChange={(v) => setSettings((s) => ({ ...s, launch: v }))}
-                  />
-                  <MiniSlider
-                    label="Lift Chain"
-                    value={settings.liftSpeed}
-                    min={2}
-                    max={20}
-                    step={0.5}
-                    fmt={(v) => `${(v * MPH_PER_MPS).toFixed(0)} mph`}
-                    onChange={(v) => setSettings((s) => ({ ...s, liftSpeed: v }))}
-                  />
-                  <MiniSlider
-                    label="Boost Thrust"
-                    value={settings.boostForce}
-                    min={2}
-                    max={45}
-                    step={0.5}
-                    fmt={(v) => `${(v * FT_PER_M).toFixed(0)} ft/s²`}
-                    onChange={(v) => setSettings((s) => ({ ...s, boostForce: v }))}
-                  />
-                  <MiniSlider
-                    label="Trim Brakes"
-                    value={settings.brakeForce}
-                    min={2}
-                    max={35}
-                    step={0.5}
-                    fmt={(v) => `${(v * FT_PER_M).toFixed(0)} ft/s²`}
-                    onChange={(v) => setSettings((s) => ({ ...s, brakeForce: v }))}
-                  />
-                  <div className="flex items-end">
-                    <button
-                      onClick={() => setSettings(DEFAULT_SETTINGS)}
-                      className="w-full rounded-lg border border-slate-200 bg-white py-2 text-xs font-bold text-slate-700 shadow-xs transition hover:bg-slate-50"
-                    >
-                      Reset Physics
-                    </button>
+                <div className="space-y-3.5">
+                  {/* Material selection cards */}
+                  <div>
+                    <div className="mb-1.5 flex items-center justify-between">
+                      <span className="text-xs font-bold uppercase tracking-wider text-slate-500">
+                        Coaster Material & Wheel Dynamics
+                      </span>
+                      <span className="text-[11px] font-medium text-slate-400">
+                        Controls rolling resistance, chattering vibration & 3D textures
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                      {(
+                        [
+                          {
+                            id: 'metal',
+                            name: 'Tubular Steel (Metal)',
+                            icon: '🔩',
+                            badge: 'High Speed',
+                            desc: 'Precision steel rails, polyurethane wheels, ultra-low rolling friction.',
+                            defaultF: 0.007,
+                          },
+                          {
+                            id: 'wood',
+                            name: 'Timber Trestle (Wood)',
+                            icon: '🪵',
+                            badge: 'High Rumble',
+                            desc: 'Laminated timber stack, steel running strips, authentic wooden track chatter.',
+                            defaultF: 0.012,
+                          },
+                          {
+                            id: 'plastic',
+                            name: 'Polymer Guide (Plastic)',
+                            icon: '🧱',
+                            badge: 'Ultra Smooth',
+                            desc: 'Molded polymer monorail/tubing, high slip coefficient, toy-like vibrance.',
+                            defaultF: 0.005,
+                          },
+                        ] as const
+                      ).map((m) => {
+                        const active = settings.material === m.id;
+                        return (
+                          <button
+                            key={m.id}
+                            onClick={() => handleSelectMaterial(m.id)}
+                            className={`flex flex-col text-left rounded-xl border p-2.5 transition ${
+                              active
+                                ? 'border-blue-600 bg-blue-50/70 shadow-xs ring-1 ring-blue-500'
+                                : 'border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50'
+                            }`}
+                          >
+                            <div className="flex items-center justify-between">
+                              <span className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
+                                <span>{m.icon}</span>
+                                <span>{m.name}</span>
+                              </span>
+                              <span
+                                className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${
+                                  active
+                                    ? 'bg-blue-600 text-white'
+                                    : 'bg-slate-100 text-slate-600'
+                                }`}
+                              >
+                                {m.badge}
+                              </span>
+                            </div>
+                            <p className="mt-1 text-[11px] leading-relaxed text-slate-500">
+                              {m.desc}
+                            </p>
+                            <div className="mt-2 text-[10px] font-mono font-semibold text-slate-400">
+                              Base μ: {m.defaultF}
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-4">
+                    <MiniSlider
+                      label="Gravity"
+                      value={settings.gravity}
+                      min={0.3}
+                      max={2}
+                      step={0.05}
+                      fmt={(v) => `${v.toFixed(2)}×`}
+                      onChange={(v) => setSettings((s) => ({ ...s, gravity: v }))}
+                    />
+                    <MiniSlider
+                      label="Friction"
+                      value={settings.friction}
+                      min={0}
+                      max={0.03}
+                      step={0.001}
+                      fmt={(v) => v.toFixed(3)}
+                      onChange={(v) => setSettings((s) => ({ ...s, friction: v }))}
+                    />
+                    <MiniSlider
+                      label="Air Drag"
+                      value={settings.drag}
+                      min={0}
+                      max={0.003}
+                      step={0.0001}
+                      fmt={(v) => v.toFixed(4)}
+                      onChange={(v) => setSettings((s) => ({ ...s, drag: v }))}
+                    />
+                    <MiniSlider
+                      label="Launch Speed"
+                      value={settings.launch}
+                      min={0}
+                      max={45}
+                      step={0.5}
+                      fmt={(v) => `${(v * MPH_PER_MPS).toFixed(0)} mph`}
+                      onChange={(v) => setSettings((s) => ({ ...s, launch: v }))}
+                    />
+                    <MiniSlider
+                      label="Lift Chain"
+                      value={settings.liftSpeed}
+                      min={2}
+                      max={20}
+                      step={0.5}
+                      fmt={(v) => `${(v * MPH_PER_MPS).toFixed(0)} mph`}
+                      onChange={(v) => setSettings((s) => ({ ...s, liftSpeed: v }))}
+                    />
+                    <MiniSlider
+                      label="Boost Thrust"
+                      value={settings.boostForce}
+                      min={2}
+                      max={45}
+                      step={0.5}
+                      fmt={(v) => `${(v * FT_PER_M).toFixed(0)} ft/s²`}
+                      onChange={(v) => setSettings((s) => ({ ...s, boostForce: v }))}
+                    />
+                    <MiniSlider
+                      label="Trim Brakes"
+                      value={settings.brakeForce}
+                      min={2}
+                      max={35}
+                      step={0.5}
+                      fmt={(v) => `${(v * FT_PER_M).toFixed(0)} ft/s²`}
+                      onChange={(v) => setSettings((s) => ({ ...s, brakeForce: v }))}
+                    />
+                    <div className="flex items-end">
+                      <button
+                        onClick={() => setSettings(DEFAULT_SETTINGS)}
+                        className="w-full rounded-lg border border-slate-200 bg-white py-2 text-xs font-bold text-slate-700 shadow-xs transition hover:bg-slate-50"
+                      >
+                        Reset Physics
+                      </button>
+                    </div>
                   </div>
                 </div>
               )}
@@ -817,7 +959,13 @@ export default function App() {
                   : ''
             }`}
           >
-            <Ride3D built={built} simRef={simRef} theme={theme} camMode={camMode} />
+            <Ride3D
+              built={built}
+              simRef={simRef}
+              theme={theme}
+              material={settings.material}
+              camMode={camMode}
+            />
             <HUD hud={hud} camMode={camMode} setCamMode={setCamMode} playing={playing} />
           </section>
         </div>

@@ -16,10 +16,11 @@ export type PieceKind =
   | 'hill'
   | 'valley'
   | 'loop'
+  | 'jump'
   | 'brake'
   | 'boost';
 
-export type Special = 0 | 1 | 2; // none | brake | boost
+export type Special = 0 | 1 | 2 | 3; // none | brake | boost | jump
 
 export interface Piece {
   id: string;
@@ -138,6 +139,19 @@ export const PIECE_DEFS: Record<PieceKind, PieceDef> = {
       { len: 18, pitch: 0, yaw: 0 },
     ],
   },
+  jump: {
+    label: 'Mid-Air Jump',
+    color: '#0284c7',
+    hint: 'Ramps up and launches train across an open mid-air leap gap (Press E)',
+    special: 3,
+    target: 0,
+    glyph: 'M2 18l6-6 M16 12l6 6 M8 7l8 2',
+    body: [
+      { len: 26, pitch: 26, yaw: 0 },
+      { len: 48, pitch: -38, yaw: 0 },
+      { len: 26, pitch: 12, yaw: 0 },
+    ],
+  },
   brake: {
     label: 'Brake',
     color: '#f43f5e',
@@ -167,6 +181,7 @@ export const PIECE_ORDER: PieceKind[] = [
   'hill',
   'valley',
   'loop',
+  'jump',
   'brake',
   'boost',
 ];

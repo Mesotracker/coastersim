@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { BuiltTrack, Frame, frameAt, makeFrame } from '../lib/track';
-import { SimState } from '../lib/physics';
+import { CoasterMaterial, SimState } from '../lib/physics';
 import { Theme } from '../lib/themes';
 
 export type CamMode = 'pov' | 'chase' | 'orbit';
@@ -10,6 +10,7 @@ interface Props {
   built: BuiltTrack;
   simRef: React.RefObject<SimState>;
   theme: Theme;
+  material?: CoasterMaterial;
   camMode: CamMode;
 }
 
@@ -81,7 +82,7 @@ function groundTexture() {
   return tex;
 }
 
-export default function Ride3D({ built, simRef, theme, camMode }: Props) {
+export default function Ride3D({ built, simRef, theme, material = 'metal', camMode }: Props) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const stateRef = useRef<{
     renderer: THREE.WebGLRenderer;
@@ -94,14 +95,17 @@ export default function Ride3D({ built, simRef, theme, camMode }: Props) {
     cockpit: THREE.Group;
     cars: THREE.Group[];
     carMat: THREE.MeshStandardMaterial;
+    chassisMat: THREE.MeshStandardMaterial;
+    seatMat: THREE.MeshStandardMaterial;
+    chromeMat: THREE.MeshStandardMaterial;
     camPos: THREE.Vector3;
     camQuat: THREE.Quaternion;
     fov: number;
     orbit: number;
     ready: boolean;
   } | null>(null);
-  const propsRef = useRef({ built, simRef, theme, camMode });
-  propsRef.current = { built, simRef, theme, camMode };
+  const propsRef = useRef({ built, simRef, theme, material, camMode });
+  propsRef.current = { built, simRef, theme, material, camMode };
 
   // ------------------------------------------------------------------ setup
   useEffect(() => {
@@ -333,6 +337,9 @@ export default function Ride3D({ built, simRef, theme, camMode }: Props) {
       cockpit,
       cars,
       carMat,
+      chassisMat,
+      seatMat,
+      chromeMat,
       camPos: new THREE.Vector3(0, 40, 120),
       camQuat: new THREE.Quaternion(),
       fov: 66,
@@ -380,7 +387,47 @@ export default function Ride3D({ built, simRef, theme, camMode }: Props) {
 
       const G = built.groundY;
       st.ground.position.y = G;
-      st.carMat.color.set(theme.car);
+
+      // Update train car finishes according to chosen material
+      if (material === 'wood') {
+        st.carMat.color.set(0x9a3412);
+        st.carMat.roughness = 0.58;
+        st.carMat.metalness = 0.12;
+        st.chassisMat.color.set(0x27272a);
+        st.chassisMat.roughness = 0.52;
+        st.chassisMat.metalness = 0.70;
+        st.seatMat.color.set(0x451a03);
+        st.seatMat.roughness = 0.88;
+        st.chromeMat.color.set(0xd97706);
+        st.chromeMat.roughness = 0.28;
+        st.chromeMat.metalness = 0.85;
+      } else if (material === 'plastic') {
+        st.carMat.color.set(theme.car);
+        st.carMat.roughness = 0.22;
+        st.carMat.metalness = 0.04;
+        st.chassisMat.color.set(0x1e293b);
+        st.chassisMat.roughness = 0.35;
+        st.chassisMat.metalness = 0.08;
+        st.seatMat.color.set(0x0f172a);
+        st.seatMat.roughness = 0.40;
+        st.chromeMat.color.set(0xffffff);
+        st.chromeMat.roughness = 0.20;
+        st.chromeMat.metalness = 0.25;
+      } else {
+        // Steel / Metal default
+        st.carMat.color.set(theme.car);
+        st.carMat.roughness = 0.20;
+        st.carMat.metalness = 0.32;
+        st.chassisMat.color.set(0x0f172a);
+        st.chassisMat.roughness = 0.28;
+        st.chassisMat.metalness = 0.85;
+        st.seatMat.color.set(0x18181b);
+        st.seatMat.roughness = 0.82;
+        st.chromeMat.color.set(0xf1f5f9);
+        st.chromeMat.roughness = 0.12;
+        st.chromeMat.metalness = 0.95;
+      }
+
       const n = S.length;
       const T = new THREE.Vector3();
       const N = new THREE.Vector3();
@@ -411,34 +458,106 @@ export default function Ride3D({ built, simRef, theme, camMode }: Props) {
         spine.push(new THREE.Vector3().copy(P).addScaledVector(nb, -1.9));
       }
 
-      // PBR Track Materials with metallic tubular sheen
-      const railMat = new THREE.MeshStandardMaterial({
-        color: new THREE.Color(theme.rail),
-        roughness: 0.20,
-        metalness: 0.82,
-        envMapIntensity: 1.25,
-      });
-      const spineMat = new THREE.MeshStandardMaterial({
-        color: new THREE.Color(theme.spine),
-        roughness: 0.32,
-        metalness: 0.62,
-        envMapIntensity: 1.1,
-      });
-      const tieMat = new THREE.MeshStandardMaterial({
-        color: new THREE.Color(theme.tie),
-        roughness: 0.40,
-        metalness: 0.52,
-      });
-      const supMat = new THREE.MeshStandardMaterial({
-        color: new THREE.Color(theme.support),
-        roughness: 0.42,
-        metalness: 0.45,
-      });
-      const footerMat = new THREE.MeshStandardMaterial({
-        color: 0x94a3b8,
-        roughness: 0.92,
-        metalness: 0.05,
-      });
+      // Mid-Air Jump gap detector
+      const isJumpGap = (i: number) => {
+        if (S[i].special !== 3) return false;
+        const pIdx = S[i].piece;
+        const r = built.pieceRanges[pIdx];
+        if (!r) return false;
+        const t = (i - r.start) / Math.max(1, r.end - r.start);
+        return t > 0.24 && t < 0.76;
+      };
+
+      // PBR Track Materials configured for Wood / Metal / Plastic
+      let railMat: THREE.MeshStandardMaterial;
+      let spineMat: THREE.MeshStandardMaterial;
+      let tieMat: THREE.MeshStandardMaterial;
+      let supMat: THREE.MeshStandardMaterial;
+      let footerMat: THREE.MeshStandardMaterial;
+
+      if (material === 'wood') {
+        railMat = new THREE.MeshStandardMaterial({
+          color: 0xd4d4d8,
+          roughness: 0.38,
+          metalness: 0.65,
+        });
+        spineMat = new THREE.MeshStandardMaterial({
+          color: 0x78350f, // Heavy dark timber ledger
+          roughness: 0.88,
+          metalness: 0.04,
+        });
+        tieMat = new THREE.MeshStandardMaterial({
+          color: 0x92400e, // Wooden railroad ties
+          roughness: 0.92,
+          metalness: 0.03,
+        });
+        supMat = new THREE.MeshStandardMaterial({
+          color: 0x854d0e, // Timber support bents
+          roughness: 0.90,
+          metalness: 0.04,
+        });
+        footerMat = new THREE.MeshStandardMaterial({
+          color: 0x78716c,
+          roughness: 0.94,
+          metalness: 0.03,
+        });
+      } else if (material === 'plastic') {
+        railMat = new THREE.MeshStandardMaterial({
+          color: new THREE.Color(theme.rail),
+          roughness: 0.32,
+          metalness: 0.03,
+        });
+        spineMat = new THREE.MeshStandardMaterial({
+          color: new THREE.Color(theme.spine),
+          roughness: 0.28,
+          metalness: 0.03,
+        });
+        tieMat = new THREE.MeshStandardMaterial({
+          color: new THREE.Color(theme.tie),
+          roughness: 0.35,
+          metalness: 0.02,
+        });
+        supMat = new THREE.MeshStandardMaterial({
+          color: new THREE.Color(theme.support),
+          roughness: 0.34,
+          metalness: 0.02,
+        });
+        footerMat = new THREE.MeshStandardMaterial({
+          color: 0xe2e8f0,
+          roughness: 0.40,
+          metalness: 0.05,
+        });
+      } else {
+        // Steel / Metal default
+        railMat = new THREE.MeshStandardMaterial({
+          color: new THREE.Color(theme.rail),
+          roughness: 0.20,
+          metalness: 0.82,
+          envMapIntensity: 1.25,
+        });
+        spineMat = new THREE.MeshStandardMaterial({
+          color: new THREE.Color(theme.spine),
+          roughness: 0.32,
+          metalness: 0.62,
+          envMapIntensity: 1.1,
+        });
+        tieMat = new THREE.MeshStandardMaterial({
+          color: new THREE.Color(theme.tie),
+          roughness: 0.40,
+          metalness: 0.52,
+        });
+        supMat = new THREE.MeshStandardMaterial({
+          color: new THREE.Color(theme.support),
+          roughness: 0.42,
+          metalness: 0.45,
+        });
+        footerMat = new THREE.MeshStandardMaterial({
+          color: 0x94a3b8,
+          roughness: 0.92,
+          metalness: 0.05,
+        });
+      }
+
       const brakeMat = new THREE.MeshStandardMaterial({
         color: 0xd97706,
         roughness: 0.25,
@@ -450,19 +569,39 @@ export default function Ride3D({ built, simRef, theme, camMode }: Props) {
         metalness: 0.80,
       });
 
-      const segs = Math.min(2400, n);
-      for (const pts of [left, right]) {
-        const geo = new THREE.TubeGeometry(new PointsCurve(pts), segs, 0.62, 8, false);
-        const mesh = new THREE.Mesh(geo, railMat);
-        mesh.castShadow = true;
-        st.trackGroup.add(mesh);
-      }
-      const spineGeo = new THREE.TubeGeometry(new PointsCurve(spine), Math.floor(segs / 2), 1.15, 8, false);
-      const spineMesh = new THREE.Mesh(spineGeo, spineMat);
-      spineMesh.castShadow = true;
-      st.trackGroup.add(spineMesh);
+      // Build continuous rail tubes with gaps over mid-air jump leaps
+      const buildRailTubes = (pts: THREE.Vector3[], radius: number, mat: THREE.Material) => {
+        const segs: THREE.Vector3[][] = [];
+        let cur: THREE.Vector3[] = [];
+        for (let i = 0; i < n; i++) {
+          if (isJumpGap(i)) {
+            if (cur.length >= 3) {
+              segs.push(cur);
+            }
+            cur = [];
+          } else {
+            cur.push(pts[i]);
+          }
+        }
+        if (cur.length >= 3) {
+          segs.push(cur);
+        }
 
-      // Cross ties
+        for (const ptsList of segs) {
+          const tubeSegments = Math.max(6, Math.min(1200, ptsList.length));
+          const geo = new THREE.TubeGeometry(new PointsCurve(ptsList), tubeSegments, radius, 8, false);
+          const mesh = new THREE.Mesh(geo, mat);
+          mesh.castShadow = true;
+          st.trackGroup.add(mesh);
+        }
+      };
+
+      for (const pts of [left, right]) {
+        buildRailTubes(pts, 0.62, railMat);
+      }
+      buildRailTubes(spine, 1.15, spineMat);
+
+      // Cross ties (skip mid-air jump gaps)
       const ds = S[1].s - S[0].s || 1.6;
       const tieEvery = Math.max(2, Math.round(6.5 / ds));
       const tieCount = Math.floor(n / tieEvery);
@@ -472,7 +611,8 @@ export default function Ride3D({ built, simRef, theme, camMode }: Props) {
       const q = new THREE.Quaternion();
       const scale = new THREE.Vector3();
       let ti = 0;
-      for (let i = 0; i < n && ti < tieCount; i += tieEvery, ti++) {
+      for (let i = 0; i < n && ti < tieCount; i += tieEvery) {
+        if (isJumpGap(i)) continue;
         const s = S[i];
         T.set(built.tan[i * 3], built.tan[i * 3 + 1], built.tan[i * 3 + 2]);
         const nb = nbArr[i];
@@ -487,6 +627,7 @@ export default function Ride3D({ built, simRef, theme, camMode }: Props) {
           scale,
         );
         ties.setMatrixAt(ti, m4);
+        ti++;
       }
       ties.count = ti;
       ties.instanceMatrix.needsUpdate = true;
@@ -553,6 +694,7 @@ export default function Ride3D({ built, simRef, theme, camMode }: Props) {
       footers.receiveShadow = true;
       let si = 0;
       for (let i = 0; i < n && si < supMax; i += supEvery) {
+        if (isJumpGap(i)) continue;
         const s = S[i];
         if (s.py - G < 8) continue;
         const nb = nbArr[i];
@@ -582,6 +724,87 @@ export default function Ride3D({ built, simRef, theme, camMode }: Props) {
       footers.instanceMatrix.needsUpdate = true;
       st.trackGroup.add(sup);
       st.trackGroup.add(footers);
+
+      // Mid-Air Jump Launch Ramp Lip, Catch Receiving Hopper & Flight Guide
+      for (let pIdx = 0; pIdx < built.pieceRanges.length; pIdx++) {
+        const r = built.pieceRanges[pIdx];
+        if (!r) continue;
+        const sMid = S[r.start];
+        if (sMid?.special !== 3) continue;
+
+        const takeoffI = Math.min(n - 1, r.start + Math.floor((r.end - r.start) * 0.24));
+        const catchI = Math.min(n - 1, r.start + Math.floor((r.end - r.start) * 0.76));
+
+        // Takeoff kicker lip
+        const sT = S[takeoffI];
+        const nbT = nbArr[takeoffI];
+        const rbT = rbArr[takeoffI];
+        T.set(built.tan[takeoffI * 3], built.tan[takeoffI * 3 + 1], built.tan[takeoffI * 3 + 2]);
+        const zAxisT = new THREE.Vector3().copy(T).negate();
+        const basisT = new THREE.Matrix4().makeBasis(rbT, nbT, zAxisT);
+        q.setFromRotationMatrix(basisT);
+
+        const lipMat = new THREE.MeshStandardMaterial({
+          color: 0xf59e0b, // bright amber launch ramp
+          roughness: 0.25,
+          metalness: 0.75,
+        });
+        const lip = new THREE.Mesh(new THREE.BoxGeometry(GAP * 2 + 2.2, 1.4, 2.5), lipMat);
+        lip.position.set(sT.px, sT.py, sT.pz).addScaledVector(nbT, -0.6);
+        lip.quaternion.copy(q);
+        lip.castShadow = true;
+        st.trackGroup.add(lip);
+
+        // Takeoff launch beacons
+        const strobeMat = new THREE.MeshStandardMaterial({
+          color: 0x38bdf8,
+          emissive: 0x38bdf8,
+          emissiveIntensity: 1.2,
+          roughness: 0.1,
+        });
+        for (const side of [-GAP - 1.2, GAP + 1.2]) {
+          const beacon = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.35, 1.2, 8), strobeMat);
+          beacon.position.set(sT.px, sT.py, sT.pz).addScaledVector(rbT, side).addScaledVector(nbT, 0.6);
+          beacon.quaternion.copy(q);
+          st.trackGroup.add(beacon);
+        }
+
+        // Catch receiving hopper
+        const sC = S[catchI];
+        const nbC = nbArr[catchI];
+        const rbC = rbArr[catchI];
+        T.set(built.tan[catchI * 3], built.tan[catchI * 3 + 1], built.tan[catchI * 3 + 2]);
+        const zAxisC = new THREE.Vector3().copy(T).negate();
+        const basisC = new THREE.Matrix4().makeBasis(rbC, nbC, zAxisC);
+        q.setFromRotationMatrix(basisC);
+
+        const hopperMat = new THREE.MeshStandardMaterial({
+          color: 0x10b981, // emerald landing catch hopper
+          roughness: 0.35,
+          metalness: 0.6,
+        });
+        const hopper = new THREE.Mesh(new THREE.BoxGeometry(GAP * 2 + 3.2, 1.6, 2.8), hopperMat);
+        hopper.position.set(sC.px, sC.py, sC.pz).addScaledVector(nbC, -0.6);
+        hopper.quaternion.copy(q);
+        hopper.castShadow = true;
+        st.trackGroup.add(hopper);
+
+        // Airborne trajectory flight guide through the gap
+        const gapPoints: THREE.Vector3[] = [];
+        for (let gi = takeoffI; gi <= catchI; gi += 2) {
+          gapPoints.push(new THREE.Vector3(S[gi].px, S[gi].py + 0.1, S[gi].pz));
+        }
+        if (gapPoints.length >= 2) {
+          const airMat = new THREE.MeshBasicMaterial({
+            color: 0x38bdf8,
+            transparent: true,
+            opacity: 0.5,
+          });
+          const airGeo = new THREE.TubeGeometry(new PointsCurve(gapPoints), 16, 0.2, 6, false);
+          const airLine = new THREE.Mesh(airGeo, airMat);
+          st.trackGroup.add(airLine);
+        }
+      }
 
       // Station platform with architectural concrete deck & safety yellow demarcation
       const platGroup = new THREE.Group();
@@ -711,7 +934,7 @@ export default function Ride3D({ built, simRef, theme, camMode }: Props) {
       cam.updateProjectionMatrix();
     }, 70);
     return () => window.clearTimeout(timer);
-  }, [built, theme]);
+  }, [built, theme, material]);
 
   // ------------------------------------------------------------- frame loop
   useEffect(() => {

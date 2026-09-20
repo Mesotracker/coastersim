@@ -21,6 +21,7 @@ interface Props {
   selected: number | null;
   snap: boolean;
   onSelect: (index: number | null) => void;
+  onHoverPiece?: (index: number | null) => void;
   onChange: (t: TrackDef, commit?: boolean) => void;
   onInsert: (kind: PieceKind, index: number) => void;
   fitSignal: number;
@@ -348,13 +349,13 @@ export default function Editor2D(props: Props) {
         const tx = X(mid.x);
         const ty = Y(mid.y) - 18;
         ctx.font = '700 11px ui-sans-serif, system-ui';
-        const label = `${def.label}`;
+        const label = piece.kind === 'jump' ? `${def.label} 🚀` : `${def.label}  [E: Jump]`;
         const tw = ctx.measureText(label).width + 12;
-        ctx.fillStyle = 'rgba(15,23,42,0.88)';
+        ctx.fillStyle = piece.kind === 'jump' ? 'rgba(245,158,11,0.95)' : 'rgba(15,23,42,0.88)';
         ctx.beginPath();
         ctx.roundRect(tx - tw / 2, ty - 11, tw, 18, 9);
         ctx.fill();
-        ctx.fillStyle = '#fff';
+        ctx.fillStyle = piece.kind === 'jump' ? '#0f172a' : '#fff';
         ctx.textAlign = 'center';
         ctx.fillText(label, tx, ty + 2);
       };
@@ -553,6 +554,7 @@ export default function Editor2D(props: Props) {
       if (d.type === 'none') {
         const hit = pickAt(sx, sy);
         hoverRef.current = { piece: hit.piece, node: hit.node, origin: hit.origin };
+        pRef.current.onHoverPiece?.(hit.piece);
         return;
       }
       if (d.type === 'pan') {
