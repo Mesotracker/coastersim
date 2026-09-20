@@ -101,6 +101,87 @@ export function resetSim(st: SimState) {
 
 const f: Frame = makeFrame();
 
+/**
+ * Scrub / Seek the simulation to a specific track position `targetS`.
+ * Instantly synchronizes coaster train position, velocity estimate, height, and G-forces.
+ */
+export function seekSim(st: SimState, track: BuiltTrack, targetS: number, cfg?: SimSettings) {
+  if (track.length <= 0) return;
+  const clampedS = Math.max(0, Math.min(track.length, targetS));
+  st.s = clampedS;
+
+  frameAt(track, clampedS, f);
+  st.height = Math.max(0, (f.y - track.groundY) * FEET_PER_UNIT);
+
+  if (clampedS < 2) {
+    st.phase = 'station';
+    st.v = 0;
+    st.speed = 0;
+    st.g = 1;
+    st.lat = 0;
+    return;
+  }
+
+  if (clampedS >= track.length - 0.5) {
+    st.phase = 'finished';
+    st.v = 2;
+    st.speed = 4.5;
+    st.g = 1;
+    st.lat = 0;
+    return;
+  }
+
+  st.phase = 'riding';
+
+  // Check if we have a recorded telemetry point near this track distance
+  let matchedSpeed: number | null = null;
+  if (st.telemetry.length > 0) {
+    let bestDist = Infinity;
+    for (const pt of st.telemetry) {
+      const dist = Math.abs(pt.s - clampedS);
+      if (dist < bestDist) {
+        bestDist = dist;
+        matchedSpeed = pt.speed;
+      }
+    }
+    if (bestDist > 30) matchedSpeed = null;
+  }
+
+  if (matchedSpeed !== null) {
+    st.speed = matchedSpeed;
+    st.v = matchedSpeed / MPH_PER_MPS;
+  } else {
+    // Lift hill vs drop velocity estimation
+    const liftEnd = track.liftEnd;
+    const liftSpeed = cfg?.liftSpeed ?? 6;
+    if (clampedS < liftEnd) {
+      st.v = liftSpeed;
+      st.speed = liftSpeed * MPH_PER_MPS;
+    } else {
+      // Conservation of mechanical energy from peak drop height
+      const peakY = track.maxHeight;
+      const dropY = Math.max(1, peakY - f.y) * METERS_PER_UNIT;
+      const vEst = Math.sqrt(Math.max(16, 2 * GRAVITY * (cfg?.gravity ?? 1) * dropY));
+      st.v = Math.min(500, vEst);
+      st.speed = st.v * MPH_PER_MPS;
+    }
+  }
+
+  const kappaM = f.kappa / METERS_PER_UNIT;
+  const yawRateM = f.yawRate / METERS_PER_UNIT;
+  const vv = st.v * st.v;
+  const g = GRAVITY * (cfg?.gravity ?? 1);
+  const aNormVert = g * Math.cos(f.pitch) + vv * kappaM;
+  const aNormLat = vv * yawRateM;
+  const cosB = Math.cos(f.bank);
+  const sinB = Math.sin(f.bank);
+  st.g = (aNormVert * cosB + aNormLat * sinB) / g;
+  st.lat = (aNormLat * cosB - aNormVert * sinB) / g;
+
+  if (st.speed > st.maxSpeed) st.maxSpeed = st.speed;
+  if (st.g > st.maxG) st.maxG = st.g;
+}
+
 function setEvent(st: SimState, msg: string, dur = 1.6) {
   st.event = msg;
   st.eventT = dur;
@@ -196,8 +277,8 @@ export function stepSim(st: SimState, track: BuiltTrack, dt: number, cfg: SimSet
         accel -= cfg.brakeForce;
       }
     } else if (f.special === 2 && velV > -0.5) {
-      // Linear induction motor (LSM) launch thrust
-      if (velV < 50) {
+      // Linear induction motor (LSM) launch thrust - uncapped for extreme acceleration
+      if (velV < 500) {
         accel += cfg.boostForce;
       }
     }
@@ -232,7 +313,8 @@ export function stepSim(st: SimState, track: BuiltTrack, dt: number, cfg: SimSet
       st.v += a2 * h;
     }
 
-    st.v = Math.max(-45, Math.min(75, st.v));
+    // Dynamic velocity clamp: allows supersonic/extreme coaster speeds (no 168 mph ceiling)
+    st.v = Math.max(-250, Math.min(800, st.v));
     st.s += (st.v * h) / METERS_PER_UNIT;
 
     if (st.s <= 0) {

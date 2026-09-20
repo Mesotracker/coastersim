@@ -32,11 +32,12 @@ import {
   defaultTrack,
   newPiece,
 } from './lib/track';
-import { DEFAULT_SETTINGS, SimSettings, makeSim, resetSim, stepSim } from './lib/physics';
+import { DEFAULT_SETTINGS, SimSettings, makeSim, resetSim, stepSim, seekSim } from './lib/physics';
 import { THEMES, Theme } from './lib/themes';
 
 type Tab = 'piece' | 'physics' | 'telemetry' | 'style';
 type LayoutMode = 'balanced' | 'wide-ride' | 'focus-designer';
+type MobileTab = 'ride' | 'editor' | 'tuning';
 
 const emptyHud: HudData = {
   speed: 0,
@@ -104,6 +105,10 @@ export default function App() {
   const [fitSignal, setFitSignal] = useState(0);
   const [tab, setTab] = useState<Tab>('piece');
   const [layoutMode, setLayoutMode] = useState<LayoutMode>('balanced');
+  const [mobileTab, setMobileTab] = useState<MobileTab>('ride');
+  const [simSpeed, setSimSpeed] = useState<number>(1);
+  const simSpeedRef = useRef(1);
+  simSpeedRef.current = simSpeed;
   const [hud, setHud] = useState<HudData>(emptyHud);
   const [hoveredPiece, setHoveredPiece] = useState<number | null>(null);
   const hoveredPieceRef = useRef<number | null>(null);
@@ -143,6 +148,25 @@ export default function App() {
   playingRef.current = playing;
   const historyRef = useRef<{ stack: TrackDef[]; t: number }>({ stack: [], t: 0 });
 
+  // Handle seeking / scrubbing the replay timeline
+  const handleSeek = useCallback((progress: number) => {
+    const targetS = Math.max(0, Math.min(builtRef.current.length, progress * builtRef.current.length));
+    seekSim(simRef.current, builtRef.current, targetS, cfgRef.current);
+    const s = simRef.current;
+    setHud((prev) => ({
+      ...prev,
+      speed: s.speed,
+      g: s.g,
+      lat: s.lat,
+      height: s.height,
+      progress: builtRef.current.length > 0 ? s.s / builtRef.current.length : 0,
+      phase: s.phase,
+      event: s.event,
+      eventT: s.eventT,
+      runTime: s.runTime,
+    }));
+  }, []);
+
   // ------------------------------------------------------------ simulation loop
   useEffect(() => {
     let raf = 0;
@@ -151,7 +175,7 @@ export default function App() {
     const tick = () => {
       raf = requestAnimationFrame(tick);
       const now = performance.now();
-      const dt = Math.min(0.05, (now - last) / 1000);
+      const dt = Math.min(0.05, ((now - last) / 1000) * simSpeedRef.current);
       last = now;
       if (playingRef.current) stepSim(simRef.current, builtRef.current, dt, cfgRef.current);
       acc += dt;
@@ -416,14 +440,14 @@ export default function App() {
   }, []);
 
   return (
-    <div className="flex h-screen min-h-[700px] flex-col overflow-hidden bg-slate-100 text-slate-900">
+    <div className="flex h-screen min-h-0 flex-col overflow-hidden bg-slate-100 text-slate-900">
       {/* ---------------------------------------------------------- header */}
-      <header className="flex h-16 shrink-0 items-center justify-between border-b border-slate-200 bg-white px-5 shadow-xs">
-        <div className="flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-sky-500 via-blue-600 to-indigo-700 shadow-md shadow-blue-500/20 text-white">
+      <header className="flex h-14 sm:h-16 shrink-0 items-center justify-between border-b border-slate-200 bg-white px-3 sm:px-5 shadow-xs">
+        <div className="flex items-center gap-2 sm:gap-3">
+          <div className="flex h-9 w-9 sm:h-10 sm:w-10 items-center justify-center rounded-xl bg-gradient-to-br from-sky-500 via-blue-600 to-indigo-700 shadow-md shadow-blue-500/20 text-white">
             <svg
               viewBox="0 0 24 24"
-              className="h-5.5 w-5.5"
+              className="h-5 w-5 sm:h-5.5 sm:w-5.5"
               fill="none"
               stroke="currentColor"
               strokeWidth={2.4}
@@ -437,13 +461,13 @@ export default function App() {
             </svg>
           </div>
           <div>
-            <div className="flex items-center gap-2">
-              <h1 className="text-base lg:text-lg font-black tracking-tight text-slate-900">Coaster Forge</h1>
-              <span className="rounded-full bg-blue-50 px-2 py-0.5 text-[10px] font-bold text-blue-700 ring-1 ring-blue-200/80">
+            <div className="flex items-center gap-1.5 sm:gap-2">
+              <h1 className="text-sm sm:text-base lg:text-lg font-black tracking-tight text-slate-900">Coaster Forge</h1>
+              <span className="rounded-full bg-blue-50 px-1.5 sm:px-2 py-0.5 text-[9px] sm:text-[10px] font-bold text-blue-700 ring-1 ring-blue-200/80">
                 PRO 3D
               </span>
             </div>
-            <p className="text-xs font-medium text-slate-500">Physics Simulation &amp; Track Designer</p>
+            <p className="hidden xs:block text-[11px] sm:text-xs font-medium text-slate-500">Physics Simulation &amp; Track Designer</p>
           </div>
         </div>
 
@@ -459,11 +483,11 @@ export default function App() {
         </div>
 
         {/* Action Controls & Presets */}
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1 sm:gap-2">
           {/* Preset Selector */}
           <div className="relative">
             <select
-              className="h-9 cursor-pointer rounded-xl border border-slate-200 bg-white px-3 pr-8 text-xs font-bold text-slate-700 shadow-xs outline-none transition hover:border-slate-300 focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+              className="h-8 sm:h-9 max-w-[110px] xs:max-w-[140px] sm:max-w-none cursor-pointer rounded-xl border border-slate-200 bg-white px-2 sm:px-3 pr-6 sm:pr-8 text-[11px] sm:text-xs font-bold text-slate-700 shadow-xs outline-none transition hover:border-slate-300 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 truncate"
               defaultValue=""
               onChange={(e) => {
                 if (e.target.value !== '') {
@@ -474,7 +498,7 @@ export default function App() {
               }}
             >
               <option value="" disabled>
-                Coaster Presets ({PRESETS.length})…
+                Presets ({PRESETS.length})…
               </option>
               {Object.entries(categories).map(([category, list]) => (
                 <optgroup key={category} label={`— ${category} Coasters —`}>
@@ -489,7 +513,7 @@ export default function App() {
           </div>
 
           {/* Material Quick Selector */}
-          <div className="flex items-center gap-1 rounded-xl border border-slate-200 bg-white p-0.5 shadow-xs">
+          <div className="hidden md:flex items-center gap-1 rounded-xl border border-slate-200 bg-white p-0.5 shadow-xs">
             <span className="px-2 text-[11px] font-bold uppercase tracking-wider text-slate-400">Material</span>
             {(['metal', 'wood', 'plastic'] as const).map((m) => (
               <button
@@ -515,7 +539,7 @@ export default function App() {
           </div>
 
           {/* Import / Export JSON Buttons */}
-          <div className="flex items-center gap-1 rounded-xl border border-slate-200 bg-white p-0.5 shadow-xs">
+          <div className="hidden xl:flex items-center gap-1 rounded-xl border border-slate-200 bg-white p-0.5 shadow-xs">
             <button
               onClick={() => {
                 setImportExportMode('import');
@@ -544,7 +568,7 @@ export default function App() {
           <button
             onClick={undo}
             title="Undo Edit (Ctrl+Z)"
-            className="flex h-9 items-center gap-1 rounded-xl border border-slate-200 bg-white px-2.5 text-xs font-bold text-slate-700 shadow-xs transition hover:bg-slate-50 active:bg-slate-100"
+            className="flex h-8 sm:h-9 items-center gap-1 rounded-xl border border-slate-200 bg-white px-2 sm:px-2.5 text-xs font-bold text-slate-700 shadow-xs transition hover:bg-slate-50 active:bg-slate-100"
           >
             <Undo2 className="h-3.5 w-3.5 text-slate-500" />
             <span className="hidden sm:inline">Undo</span>
@@ -552,15 +576,15 @@ export default function App() {
           <button
             onClick={clearTrack}
             title="Clear All Pieces"
-            className="flex h-9 items-center gap-1 rounded-xl border border-slate-200 bg-white px-2.5 text-xs font-bold text-slate-700 shadow-xs transition hover:bg-slate-50 active:bg-slate-100"
+            className="hidden sm:flex h-8 sm:h-9 items-center gap-1 rounded-xl border border-slate-200 bg-white px-2 sm:px-2.5 text-xs font-bold text-slate-700 shadow-xs transition hover:bg-slate-50 active:bg-slate-100"
           >
             <Trash2 className="h-3.5 w-3.5 text-slate-400 hover:text-rose-500" />
-            <span className="hidden sm:inline">Clear</span>
+            <span>Clear</span>
           </button>
           <button
             onClick={restart}
             title="Restart Coaster from Station (R)"
-            className="flex h-9 items-center gap-1 rounded-xl border border-slate-200 bg-white px-2.5 text-xs font-bold text-slate-700 shadow-xs transition hover:bg-slate-50 active:bg-slate-100"
+            className="flex h-8 sm:h-9 items-center gap-1 rounded-xl border border-slate-200 bg-white px-2 sm:px-2.5 text-xs font-bold text-slate-700 shadow-xs transition hover:bg-slate-50 active:bg-slate-100"
           >
             <RotateCcw className="h-3.5 w-3.5 text-slate-500" />
             <span className="hidden sm:inline">Restart</span>
@@ -570,7 +594,7 @@ export default function App() {
           <button
             onClick={() => setPlaying((p) => !p)}
             title="Spacebar to toggle simulation"
-            className={`flex h-9 items-center gap-2 rounded-xl px-4 text-xs font-bold text-white shadow-md transition ${
+            className={`flex h-8 sm:h-9 items-center gap-1.5 sm:gap-2 rounded-xl px-3 sm:px-4 text-xs font-bold text-white shadow-md transition ${
               playing
                 ? 'bg-slate-900 shadow-slate-900/20 hover:bg-slate-800'
                 : 'bg-emerald-600 shadow-emerald-600/25 hover:bg-emerald-500'
@@ -600,7 +624,38 @@ export default function App() {
       )}
 
       {/* ------------------------------------------------------------ body */}
-      <main className="flex min-h-0 flex-1 flex-col overflow-hidden p-3.5 gap-3">
+      <main className="flex min-h-0 flex-1 flex-col overflow-hidden p-2 sm:p-3.5 gap-2 sm:gap-3">
+        {/* Mobile View Switcher (3D Ride / 2D Track / Workbench) */}
+        <div className="flex lg:hidden items-center justify-between p-1 rounded-xl bg-slate-200/90 shadow-inner">
+          <button
+            onClick={() => setMobileTab('ride')}
+            className={`flex-1 py-1.5 text-xs font-bold rounded-lg transition flex items-center justify-center gap-1.5 ${
+              mobileTab === 'ride' ? 'bg-white text-blue-700 shadow-xs' : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            <span>🎢</span>
+            <span>3D Ride</span>
+          </button>
+          <button
+            onClick={() => setMobileTab('editor')}
+            className={`flex-1 py-1.5 text-xs font-bold rounded-lg transition flex items-center justify-center gap-1.5 ${
+              mobileTab === 'editor' ? 'bg-white text-blue-700 shadow-xs' : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            <span>✏️</span>
+            <span>2D Track</span>
+          </button>
+          <button
+            onClick={() => setMobileTab('tuning')}
+            className={`flex-1 py-1.5 text-xs font-bold rounded-lg transition flex items-center justify-center gap-1.5 ${
+              mobileTab === 'tuning' ? 'bg-white text-blue-700 shadow-xs' : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            <span>⚙️</span>
+            <span>Workbench</span>
+          </button>
+        </div>
+
         {/* Layout Mode Bar on desktop */}
         <div className="hidden lg:flex items-center justify-between px-1">
           <div className="flex items-center gap-2 text-xs font-bold text-slate-500">
@@ -646,17 +701,19 @@ export default function App() {
 
         {/* Main Resizable Split Workspace */}
         <div
-          className={`grid min-h-0 flex-1 grid-cols-1 gap-3.5 overflow-hidden ${
+          className={`min-h-0 flex-1 overflow-hidden ${
             layoutMode === 'wide-ride'
-              ? 'lg:grid-cols-12'
+              ? 'lg:grid lg:grid-cols-12 lg:gap-3.5'
               : layoutMode === 'focus-designer'
-                ? 'lg:grid-cols-12'
-                : 'lg:grid-cols-2'
+                ? 'lg:grid lg:grid-cols-12 lg:gap-3.5'
+                : 'lg:grid lg:grid-cols-2 lg:gap-3.5'
           }`}
         >
           {/* ------------------------------------------------- left: designer & workbench */}
           <section
-            className={`flex flex-col gap-3 min-h-0 overflow-hidden ${
+            className={`flex-col gap-3 min-h-0 overflow-hidden ${
+              mobileTab === 'ride' ? 'hidden lg:flex' : 'flex h-full'
+            } ${
               layoutMode === 'wide-ride'
                 ? 'lg:col-span-5'
                 : layoutMode === 'focus-designer'
@@ -665,7 +722,7 @@ export default function App() {
             }`}
           >
             {/* Pieces palette */}
-            <div className="rounded-2xl border border-slate-200 bg-white p-3 shadow-xs">
+            <div className={`rounded-2xl border border-slate-200 bg-white p-3 shadow-xs ${mobileTab === 'tuning' ? 'hidden lg:block' : 'block'}`}>
               <div className="mb-2 flex items-center justify-between px-1">
                 <div className="flex items-center gap-2">
                   <h2 className="text-xs font-bold uppercase tracking-wider text-slate-600">
@@ -687,7 +744,7 @@ export default function App() {
             </div>
 
             {/* 2D Canvas Editor */}
-            <div className="min-h-[260px] flex-1 overflow-hidden">
+            <div className={`min-h-[260px] flex-1 overflow-hidden ${mobileTab === 'tuning' ? 'hidden lg:block' : 'block'}`}>
               <Editor2D
                 track={track}
                 built={built}
@@ -707,7 +764,7 @@ export default function App() {
             </div>
 
             {/* Bottom tabbed workbench */}
-            <div className="rounded-2xl border border-slate-200 bg-white p-3 shadow-xs">
+            <div className={`rounded-2xl border border-slate-200 bg-white p-3 shadow-xs ${mobileTab === 'editor' ? 'hidden lg:block' : 'block flex-1 lg:flex-none overflow-y-auto'}`}>
               <div className="mb-3 flex gap-1 rounded-xl bg-slate-100 p-1">
                 {(['piece', 'physics', 'telemetry', 'style'] as Tab[]).map((t) => (
                   <button
@@ -954,6 +1011,8 @@ export default function App() {
           {/* ---------------------------------------------------- right: 3D Viewport */}
           <section
             className={`relative min-h-[380px] overflow-hidden rounded-2xl border border-slate-200 bg-sky-200 shadow-sm lg:min-h-0 ${
+              mobileTab !== 'ride' ? 'hidden lg:block' : 'block h-full'
+            } ${
               layoutMode === 'wide-ride'
                 ? 'lg:col-span-7'
                 : layoutMode === 'focus-designer'
@@ -979,6 +1038,12 @@ export default function App() {
               aerialFollow={aerialFollow}
               setAerialFollow={setAerialFollow}
               playing={playing}
+              onTogglePlay={() => setPlaying((p) => !p)}
+              onRestart={restart}
+              onSeek={handleSeek}
+              simSpeed={simSpeed}
+              setSimSpeed={setSimSpeed}
+              trackLengthFt={lengthFt}
             />
           </section>
         </div>

@@ -550,14 +550,28 @@ export default function Ride3D({
     };
 
     // ================================================================
-    // POINTER CONTROLS (Movable Aerial Drone with Pointer - No Auto-Spin)
+    // POINTER & MULTI-TOUCH CONTROLS (Mobile Pinch-Zoom & Aerial Drone)
     // ================================================================
     let isDragging = false;
     let isPanning = false;
     let lastX = 0;
     let lastY = 0;
+    const activePointers = new Map<number, { x: number; y: number }>();
+    let initialPinchDist = 0;
+    let initialAerialDist = 260;
+
+    renderer.domElement.style.touchAction = 'none';
 
     const onPointerDown = (e: PointerEvent) => {
+      activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+      if (activePointers.size === 2) {
+        const pts = Array.from(activePointers.values());
+        initialPinchDist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+        initialAerialDist = stateRef.current?.aerialDist ?? 260;
+        return;
+      }
+
       if (propsRef.current.camMode !== 'orbit') return;
       isDragging = true;
       isPanning = e.button === 2 || e.shiftKey;
@@ -570,14 +584,29 @@ export default function Ride3D({
     };
 
     const onPointerMove = (e: PointerEvent) => {
+      if (activePointers.has(e.pointerId)) {
+        activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      }
+
+      const st = stateRef.current;
+      if (!st) return;
+
+      // Multi-touch pinch-to-zoom for mobile & tablets
+      if (activePointers.size >= 2) {
+        const pts = Array.from(activePointers.values());
+        const currentPinchDist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+        if (initialPinchDist > 12) {
+          const ratio = initialPinchDist / Math.max(12, currentPinchDist);
+          st.aerialDist = Math.max(30, Math.min(3200, initialAerialDist * ratio));
+        }
+        return;
+      }
+
       if (!isDragging) return;
       const dx = e.clientX - lastX;
       const dy = e.clientY - lastY;
       lastX = e.clientX;
       lastY = e.clientY;
-
-      const st = stateRef.current;
-      if (!st) return;
 
       if (isPanning) {
         // Pan aerial target on ground plane
@@ -597,6 +626,10 @@ export default function Ride3D({
     };
 
     const onPointerUp = (e: PointerEvent) => {
+      activePointers.delete(e.pointerId);
+      if (activePointers.size < 2) {
+        initialPinchDist = 0;
+      }
       isDragging = false;
       try {
         renderer.domElement.releasePointerCapture(e.pointerId);

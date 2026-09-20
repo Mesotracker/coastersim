@@ -64,6 +64,9 @@ export default function Editor2D(props: Props) {
     origin: false,
   });
   const dropRef = useRef<{ index: number; x: number; y: number } | null>(null);
+  const activePointersRef = useRef<Map<number, { sx: number; sy: number }>>(new Map());
+  const initialPinchDistRef = useRef<number>(0);
+  const initialPinchZoomRef = useRef<number>(1);
   const pRef = useRef(props);
   pRef.current = props;
 
@@ -527,7 +530,21 @@ export default function Editor2D(props: Props) {
       const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
       const sx = e.clientX - rect.left;
       const sy = e.clientY - rect.top;
-      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+      try {
+        (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+      } catch {}
+
+      activePointersRef.current.set(e.pointerId, { sx, sy });
+
+      // Multi-touch pinch-to-zoom check
+      if (activePointersRef.current.size === 2) {
+        const pts = Array.from(activePointersRef.current.values());
+        initialPinchDistRef.current = Math.hypot(pts[0].sx - pts[1].sx, pts[0].sy - pts[1].sy);
+        initialPinchZoomRef.current = viewRef.current.zoom;
+        dragRef.current = { type: 'none' };
+        return;
+      }
+
       const hit = pickAt(sx, sy);
       if (e.button === 1 || e.shiftKey || (!hit.origin && hit.piece === null)) {
         const v = viewRef.current;
@@ -558,6 +575,22 @@ export default function Editor2D(props: Props) {
       const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
       const sx = e.clientX - rect.left;
       const sy = e.clientY - rect.top;
+
+      if (activePointersRef.current.has(e.pointerId)) {
+        activePointersRef.current.set(e.pointerId, { sx, sy });
+      }
+
+      // Multi-touch pinch zoom
+      if (activePointersRef.current.size >= 2) {
+        const pts = Array.from(activePointersRef.current.values());
+        const dist = Math.hypot(pts[0].sx - pts[1].sx, pts[0].sy - pts[1].sy);
+        if (initialPinchDistRef.current > 12) {
+          const factor = dist / initialPinchDistRef.current;
+          viewRef.current.zoom = Math.max(0.12, Math.min(3.2, initialPinchZoomRef.current * factor));
+        }
+        return;
+      }
+
       const d = dragRef.current;
       const { track, snap } = pRef.current;
 
@@ -613,7 +646,15 @@ export default function Editor2D(props: Props) {
     [pickAt, toWorld],
   );
 
-  const endDrag = useCallback(() => {
+  const endDrag = useCallback((e?: React.PointerEvent) => {
+    if (e) {
+      activePointersRef.current.delete(e.pointerId);
+    } else {
+      activePointersRef.current.clear();
+    }
+    if (activePointersRef.current.size < 2) {
+      initialPinchDistRef.current = 0;
+    }
     dragRef.current = { type: 'none' };
   }, []);
 
