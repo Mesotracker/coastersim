@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Download, Upload, Copy, Check, FileCode, AlertCircle, X, Sparkles } from 'lucide-react';
+import { Download, Upload, Copy, Check, FileCode, AlertCircle, X, Sparkles, Sliders } from 'lucide-react';
 import { TrackDef, Piece, PieceKind } from '../lib/track';
 import { SimSettings } from '../lib/physics';
 import { Theme } from '../lib/themes';
@@ -18,6 +18,14 @@ export interface CoasterProject {
   track: TrackDef;
   settings?: SimSettings;
   theme?: Theme;
+}
+
+export interface PhysicsSettingsExport {
+  format: 'coaster-physics-settings';
+  version: string;
+  name: string;
+  exportedAt: string;
+  settings: SimSettings;
 }
 
 interface Props {
@@ -52,6 +60,8 @@ export default function ImportExportModal({
 }: Props) {
   const [mode, setMode] = useState<'export' | 'import'>(initialMode);
   const [coasterName, setCoasterName] = useState('My Custom Coaster');
+  const [includeSettings, setIncludeSettings] = useState(true);
+  const [includeTheme, setIncludeTheme] = useState(true);
   const [copied, setCopied] = useState(false);
   const [pasteText, setPasteText] = useState('');
   const [importError, setImportError] = useState<string | null>(null);
@@ -81,11 +91,11 @@ export default function ImportExportModal({
         maxSpeedMph: Math.round(stats.maxSpeedMph),
       },
       track,
-      settings,
-      theme,
+      ...(includeSettings ? { settings } : {}),
+      ...(includeTheme ? { theme } : {}),
     };
     return JSON.stringify(project, null, 2);
-  }, [coasterName, track, settings, theme, stats]);
+  }, [coasterName, track, settings, theme, stats, includeSettings, includeTheme]);
 
   // Copy to clipboard
   const handleCopy = async () => {
@@ -106,7 +116,7 @@ export default function ImportExportModal({
     }
   };
 
-  // Download .json file
+  // Download coaster .json file
   const handleDownload = () => {
     const slug = (coasterName.trim() || 'coaster')
       .toLowerCase()
@@ -123,6 +133,27 @@ export default function ImportExportModal({
     URL.revokeObjectURL(url);
   };
 
+  // Download physics settings only .json file
+  const handleDownloadSettingsOnly = () => {
+    const physicsExport: PhysicsSettingsExport = {
+      format: 'coaster-physics-settings',
+      version: '1.0',
+      name: `${coasterName.trim() || 'Coaster'} Physics Settings`,
+      exportedAt: new Date().toISOString(),
+      settings,
+    };
+    const jsonStr = JSON.stringify(physicsExport, null, 2);
+    const blob = new Blob([jsonStr], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'coaster-physics-settings.json';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
   // Validate and parse raw imported JSON string
   const parseImportData = (rawText: string) => {
     setImportError(null);
@@ -131,6 +162,23 @@ export default function ImportExportModal({
     }
     try {
       const parsed = JSON.parse(rawText);
+
+      // Case 0: Standalone Physics Settings JSON
+      if (
+        parsed.format === 'coaster-physics-settings' ||
+        (parsed.settings && typeof parsed.settings.friction === 'number') ||
+        (typeof parsed.friction === 'number' && typeof parsed.gravity === 'number')
+      ) {
+        const targetSettings: SimSettings = parsed.settings || parsed;
+        return {
+          track,
+          settings: targetSettings,
+          theme: undefined,
+          name: parsed.name || 'Custom Physics Settings',
+          isSettingsOnly: true,
+        };
+      }
+
       let targetTrack: TrackDef | null = null;
       let targetSettings: SimSettings | undefined;
       let targetTheme: Theme | undefined;
@@ -151,7 +199,7 @@ export default function ImportExportModal({
           pieces: parsed.pieces,
         };
       } else {
-        setImportError('Invalid JSON structure: could not locate "pieces" array in coaster data.');
+        setImportError('Invalid JSON structure: could not locate "pieces" or physics "settings" in data.');
         return null;
       }
 
@@ -170,6 +218,10 @@ export default function ImportExportModal({
         'curveL',
         'curveR',
         'loop',
+        'zeroGRoll',
+        'corkscrew',
+        'immelmann',
+        'jump',
         'boost',
         'brake',
       ]);
@@ -204,6 +256,7 @@ export default function ImportExportModal({
         settings: targetSettings,
         theme: targetTheme,
         name: importedName,
+        isSettingsOnly: false,
       };
     } catch (err: any) {
       setImportError(`JSON Syntax Error: ${err?.message || 'Invalid JSON'}`);
@@ -343,6 +396,50 @@ export default function ImportExportModal({
                 </div>
               </div>
 
+              {/* Optional Settings Toggles */}
+              <div className="rounded-xl border border-slate-200 bg-slate-50/75 p-3.5 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold uppercase tracking-wider text-slate-600">
+                    Export JSON Options
+                  </span>
+                  <button
+                    type="button"
+                    onClick={handleDownloadSettingsOnly}
+                    className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-bold text-slate-700 shadow-xs hover:bg-slate-50 hover:text-blue-600"
+                    title="Export friction, drag, and G-buffer as a standalone settings JSON file"
+                  >
+                    <Sliders className="h-3 w-3 text-blue-600" />
+                    <span>Save Physics Settings (.json)</span>
+                  </button>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+                  <label className="flex cursor-pointer items-center gap-2 rounded-lg border border-slate-200 bg-white p-2.5 font-medium text-slate-700 transition hover:bg-slate-50">
+                    <input
+                      type="checkbox"
+                      checked={includeSettings}
+                      onChange={(e) => setIncludeSettings(e.target.checked)}
+                      className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                    />
+                    <div>
+                      <div className="font-bold text-slate-800">Save Physics Settings</div>
+                      <div className="text-[10px] text-slate-500">Friction, drag, gravity &amp; G-buffer</div>
+                    </div>
+                  </label>
+                  <label className="flex cursor-pointer items-center gap-2 rounded-lg border border-slate-200 bg-white p-2.5 font-medium text-slate-700 transition hover:bg-slate-50">
+                    <input
+                      type="checkbox"
+                      checked={includeTheme}
+                      onChange={(e) => setIncludeTheme(e.target.checked)}
+                      className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                    />
+                    <div>
+                      <div className="font-bold text-slate-800">Save Color Theme</div>
+                      <div className="text-[10px] text-slate-500">Rails, spine, ties &amp; car colors</div>
+                    </div>
+                  </label>
+                </div>
+              </div>
+
               <div>
                 <div className="mb-1.5 flex items-center justify-between">
                   <span className="text-xs font-bold uppercase tracking-wider text-slate-600">JSON Payload</span>
@@ -422,16 +519,34 @@ export default function ImportExportModal({
               )}
 
               {currentParsed && (
-                <div className="flex items-center justify-between rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-xs">
-                  <div className="flex items-center gap-2">
-                    <Sparkles className="h-4 w-4 text-emerald-600" />
-                    <span className="font-bold text-emerald-900">
-                      Valid track detected: {currentParsed.name || 'Imported Coaster'}
-                    </span>
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-xs">
+                    <div className="flex items-center gap-2">
+                      <Sparkles className="h-4 w-4 text-emerald-600" />
+                      <span className="font-bold text-emerald-900">
+                        {currentParsed.isSettingsOnly
+                          ? `Valid Physics Settings: ${currentParsed.name || 'Custom Physics'}`
+                          : `Valid Track: ${currentParsed.name || 'Imported Coaster'}`}
+                      </span>
+                    </div>
+                    {!currentParsed.isSettingsOnly && (
+                      <span className="font-mono font-semibold text-emerald-800">
+                        {currentParsed.track.pieces.length} pieces
+                      </span>
+                    )}
                   </div>
-                  <span className="font-mono font-semibold text-emerald-800">
-                    {currentParsed.track.pieces.length} pieces
-                  </span>
+                  <div className="flex flex-wrap items-center gap-3 px-1 text-[11px] text-slate-600">
+                    {currentParsed.settings && (
+                      <span className="flex items-center gap-1 font-medium text-blue-700">
+                        <Sliders className="h-3 w-3 text-blue-600" /> Includes physics settings (Friction, Drag, G-Buffer)
+                      </span>
+                    )}
+                    {currentParsed.theme && (
+                      <span className="font-medium text-purple-700">
+                        • Includes custom color theme
+                      </span>
+                    )}
+                  </div>
                 </div>
               )}
             </div>
@@ -470,7 +585,7 @@ export default function ImportExportModal({
               className="flex items-center gap-1.5 rounded-xl bg-blue-600 px-5 py-2 text-xs font-bold text-white shadow-md shadow-blue-200 hover:bg-blue-500 disabled:opacity-40"
             >
               <Upload className="h-4 w-4" />
-              Load Coaster
+              {currentParsed?.isSettingsOnly ? 'Apply Settings' : 'Load Coaster'}
             </button>
           )}
         </div>

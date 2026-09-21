@@ -417,6 +417,27 @@ export default function App() {
     [pushHistory, showToast, track],
   );
 
+  const handleSavePhysicsOnly = useCallback(() => {
+    const physicsExport = {
+      format: 'coaster-physics-settings',
+      version: '1.0',
+      name: 'Coaster Physics Settings',
+      exportedAt: new Date().toISOString(),
+      settings,
+    };
+    const jsonStr = JSON.stringify(physicsExport, null, 2);
+    const blob = new Blob([jsonStr], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'coaster-physics-settings.json';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    showToast('Saved physics settings (.json)');
+  }, [settings, showToast]);
+
   // ------------------------------------------------------------- shortcuts
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -985,12 +1006,31 @@ export default function App() {
                       fmt={(v) => `${(v * FT_PER_M).toFixed(0)} ft/s²`}
                       onChange={(v) => setSettings((s) => ({ ...s, brakeForce: v }))}
                     />
-                    <div className="flex items-end">
+                    <MiniSlider
+                      label="G-Force Buffer"
+                      value={settings.gForceBuffer ?? 0.25}
+                      min={0}
+                      max={0.8}
+                      step={0.05}
+                      fmt={(v) => `${(v * 100).toFixed(0)}% cushion`}
+                      onChange={(v) => setSettings((s) => ({ ...s, gForceBuffer: v }))}
+                    />
+                    <div className="flex items-end gap-1.5 col-span-1 sm:col-span-2">
                       <button
-                        onClick={() => setSettings(DEFAULT_SETTINGS)}
-                        className="w-full rounded-lg border border-slate-200 bg-white py-2 text-xs font-bold text-slate-700 shadow-xs transition hover:bg-slate-50"
+                        onClick={handleSavePhysicsOnly}
+                        className="flex-1 rounded-lg border border-slate-200 bg-white py-2 text-xs font-bold text-slate-700 shadow-xs transition hover:bg-slate-50 hover:text-blue-600"
+                        title="Export current friction, drag, and G-force buffer to a .json file"
                       >
-                        Reset Physics
+                        Save Physics (.json)
+                      </button>
+                      <button
+                        onClick={() => {
+                          setSettings(DEFAULT_SETTINGS);
+                          showToast('Reset physics to default');
+                        }}
+                        className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 shadow-xs transition hover:bg-slate-50"
+                      >
+                        Reset
                       </button>
                     </div>
                   </div>

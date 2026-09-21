@@ -48,7 +48,7 @@ export default function SpeedGraph({
   // Export telemetry as CSV file
   const handleDownloadCSV = useCallback(() => {
     const rows = [
-      ['Time (s)', 'Speed (mph)', 'G-Force (g)', 'Elevation (ft)', 'Track Distance (m)'],
+      ['Time (s)', 'Speed (mph)', 'Vertical G (g)', 'Lateral G (g)', 'Elevation (ft)', 'Track Distance (m)'],
     ];
 
     if (telemetry.length === 0) {
@@ -57,6 +57,7 @@ export default function SpeedGraph({
         currentTime.toFixed(2),
         currentSpeed.toFixed(1),
         '1.00',
+        '0.00',
         '0',
         '0',
       ]);
@@ -66,6 +67,7 @@ export default function SpeedGraph({
           pt.t.toFixed(2),
           pt.speed.toFixed(1),
           pt.g.toFixed(2),
+          (pt.lat ?? 0).toFixed(2),
           pt.height.toString(),
           pt.s.toString(),
         ]);
@@ -490,8 +492,8 @@ export default function SpeedGraph({
                 }, ${getY(hoveredPoint.speed) > height - 70 ? -52 : -20})`}
               >
                 <rect
-                  width="96"
-                  height="48"
+                  width="106"
+                  height="50"
                   rx="6"
                   fill="#0f172a"
                   opacity="0.92"
@@ -503,8 +505,12 @@ export default function SpeedGraph({
                 <text x="8" y="27" className="fill-sky-400 font-mono text-[9px] font-bold">
                   {hoveredPoint.speed.toFixed(1)} mph
                 </text>
-                <text x="8" y="40" className="fill-slate-300 font-mono text-[8.5px]">
-                  G: <tspan className="fill-amber-300">{hoveredPoint.g.toFixed(2)}g</tspan> · <tspan className="fill-emerald-300">{hoveredPoint.height}ft</tspan>
+                <text x="8" y="41" className="fill-slate-300 font-mono text-[8.5px]">
+                  G: <tspan className="fill-amber-300">{hoveredPoint.g.toFixed(2)}</tspan>
+                  {hoveredPoint.lat !== undefined && (
+                    <tspan className="fill-purple-300"> ({Math.abs(hoveredPoint.lat).toFixed(1)}L)</tspan>
+                  )}
+                  {' '}· <tspan className="fill-emerald-300">{hoveredPoint.height}ft</tspan>
                 </text>
               </g>
             </g>

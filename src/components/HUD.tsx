@@ -187,17 +187,17 @@ export default function HUD({
 
   // Real-time active force danger banner
   let activeHazardBanner: { text: string; fatal: boolean } | null = null;
-  if (hud.g >= 8.5) {
+  if (hud.g >= 9.0) {
     activeHazardBanner = { text: `☠️ CRITICAL: +${hud.g.toFixed(1)}G LETHAL SPINAL BURST & CARDIAC ARREST`, fatal: true };
-  } else if (hud.g >= 5.8) {
+  } else if (hud.g >= 6.2) {
     activeHazardBanner = { text: `⚠️ DANGER: +${hud.g.toFixed(1)}G RETINAL ISCHEMIA & G-LOC BLACKOUT`, fatal: false };
-  } else if (hud.g <= -3.0) {
+  } else if (hud.g <= -3.2) {
     activeHazardBanner = { text: `☠️ CRITICAL: ${hud.g.toFixed(1)}G INTRACRANIAL HEMORRHAGE & FATAL STROKE`, fatal: true };
-  } else if (hud.g <= -1.6) {
+  } else if (hud.g <= -2.0) {
     activeHazardBanner = { text: `⚠️ DANGER: ${hud.g.toFixed(1)}G CEPHALIC REDOUT & OCULAR PRESSURE`, fatal: false };
-  } else if (Math.abs(hud.lat) >= 3.8) {
+  } else if (Math.abs(hud.lat) >= 4.0) {
     activeHazardBanner = { text: `☠️ CRITICAL: ${Math.abs(hud.lat).toFixed(1)}G INTERNAL DECAPITATION SEVERANCE`, fatal: true };
-  } else if (Math.abs(hud.lat) >= 2.3) {
+  } else if (Math.abs(hud.lat) >= 2.6) {
     activeHazardBanner = { text: `⚠️ DANGER: ${Math.abs(hud.lat).toFixed(1)}G SEVERE CERVICAL WHIPLASH`, fatal: false };
   }
 

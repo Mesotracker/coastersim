@@ -11,17 +11,19 @@ export interface SimSettings {
   brakeForce: number; // m/s^2
   boostForce: number; // m/s^2
   material?: CoasterMaterial;
+  gForceBuffer?: number; // 0.0 to 0.8: softens felt passenger G-forces without altering train velocity
 }
 
 export const DEFAULT_SETTINGS: SimSettings = {
   gravity: 1,
-  friction: 0.0035, // realistic steel wheels on tubular rails (polyurethane tread)
-  drag: 0.00035, // realistic aerodynamic drag profile for train
-  liftSpeed: 6, // ~13.4 mph chain lift speed
-  launch: 9, // ~20.1 mph station dispatch drive
-  brakeForce: 8.5, // ~0.87 G deceleration
-  boostForce: 18, // ~1.84 G linear induction motor boost
+  friction: 0.0065, // realistic steel wheels on tubular rails (with wheel rolling drag)
+  drag: 0.00045, // realistic aerodynamic drag profile for train
+  liftSpeed: 5.5, // ~12.3 mph chain lift speed
+  launch: 7.5, // ~16.8 mph station dispatch drive
+  brakeForce: 7.5, // ~0.76 G deceleration
+  boostForce: 13, // ~1.33 G linear induction motor boost
   material: 'metal',
+  gForceBuffer: 0.25, // 25% G-force dampener (softens spikes without reducing speed)
 };
 
 export type Phase = 'station' | 'riding' | 'finished';
@@ -30,6 +32,7 @@ export interface TelemetryPoint {
   t: number; // time in seconds from dispatch
   speed: number; // speed in mph
   g: number; // vertical G-force
+  lat?: number; // lateral G-force
   height: number; // elevation in feet
   s: number; // track distance
 }
@@ -112,6 +115,7 @@ export function precomputeFullRideTelemetry(
   telemetry: TelemetryPoint[];
   maxSpeed: number;
   maxG: number;
+  maxLat: number;
   totalDuration: number;
   airtime: number;
   stalled: boolean;
@@ -121,6 +125,7 @@ export function precomputeFullRideTelemetry(
       telemetry: [],
       maxSpeed: 0,
       maxG: 1,
+      maxLat: 0,
       totalDuration: 0,
       airtime: 0,
       stalled: false,
@@ -136,6 +141,7 @@ export function precomputeFullRideTelemetry(
   let runTime = 0;
   let maxSpeed = 0;
   let maxG = 1;
+  let maxLat = 0;
   let airtime = 0;
   let lastSampleT = -1;
   let stallTimer = 0;
@@ -152,6 +158,7 @@ export function precomputeFullRideTelemetry(
     t: 0,
     speed: Math.round(v * MPH_PER_MPS * 10) / 10,
     g: 1,
+    lat: 0,
     height: Math.round(startH),
     s: 0,
   });
@@ -161,7 +168,8 @@ export function precomputeFullRideTelemetry(
     const sinP = Math.sin(tempF.pitch);
     const cosP = Math.cos(tempF.pitch);
 
-    let accel = -g * sinP;
+    // Mechanical wheel rotational inertia factor: ~0.94 of gravitational acceleration converts to linear track speed
+    let accel = -g * sinP * 0.94;
     accel -= cfg.drag * velV * Math.abs(velV);
 
     const kappaM = tempF.kappa / METERS_PER_UNIT;
@@ -244,12 +252,22 @@ export function precomputeFullRideTelemetry(
     const aNormLat = vv * yawRateM;
     const cosB = Math.cos(tempF.bank);
     const sinB = Math.sin(tempF.bank);
-    const vertG = (aNormVert * cosB + aNormLat * sinB) / g;
+    
+    // Raw physical G-forces before buffering
+    const rawVertG = (aNormVert * cosB + aNormLat * sinB) / g;
+    const rawLatG = (aNormLat * cosB - aNormVert * sinB) / g;
+
+    // G-Force Buffer: dampens dynamic deviation from 1.0G (comfort dampening without affecting train velocity)
+    const bufferFactor = Math.max(0, Math.min(0.85, cfg.gForceBuffer ?? 0.25));
+    const vertG = 1.0 + (rawVertG - 1.0) * (1.0 - bufferFactor);
+    const latG = rawLatG * (1.0 - bufferFactor);
+
     const spd = Math.abs(v) * MPH_PER_MPS;
     const heightFt = Math.max(0, (tempF.y - track.groundY) * FEET_PER_UNIT);
 
     if (spd > maxSpeed) maxSpeed = spd;
     if (vertG > maxG) maxG = vertG;
+    if (Math.abs(latG) > maxLat) maxLat = Math.abs(latG);
     if (tempF.special === 3 || vertG < 0.2) airtime += dt;
 
     // Record telemetry point every 0.08s (~12.5 Hz sample rate)
@@ -259,6 +277,7 @@ export function precomputeFullRideTelemetry(
         t: Math.round(runTime * 100) / 100,
         speed: Math.round(spd * 10) / 10,
         g: Math.round(vertG * 100) / 100,
+        lat: Math.round(latG * 100) / 100,
         height: Math.round(heightFt),
         s: Math.round(s),
       });
@@ -269,6 +288,7 @@ export function precomputeFullRideTelemetry(
     telemetry: pts,
     maxSpeed,
     maxG,
+    maxLat,
     totalDuration: runTime,
     airtime,
     stalled,
@@ -414,7 +434,8 @@ export function stepSim(st: SimState, track: BuiltTrack, dt: number, cfg: SimSet
     const cosP = Math.cos(f.pitch);
 
     // Gravity along track tangent: +pitch = climbing, so -g*sin(pitch)
-    let accel = -g * sinP;
+    // Mechanical wheel rotational inertia factor: ~0.94 of gravitational acceleration converts to linear track speed
+    let accel = -g * sinP * 0.94;
 
     // Aerodynamic quadratic drag: a_drag = -C_drag * v * |v|
     accel -= cfg.drag * velV * Math.abs(velV);
@@ -525,8 +546,13 @@ export function stepSim(st: SimState, track: BuiltTrack, dt: number, cfg: SimSet
   const bank = f.bank;
   const cosB = Math.cos(bank);
   const sinB = Math.sin(bank);
-  st.g = (aNormVert * cosB + aNormLat * sinB) / g;
-  st.lat = (aNormLat * cosB - aNormVert * sinB) / g;
+  const rawVertG = (aNormVert * cosB + aNormLat * sinB) / g;
+  const rawLatG = (aNormLat * cosB - aNormVert * sinB) / g;
+
+  // G-Force Buffer: dampens dynamic deviation from 1.0G (comfort dampening without affecting train velocity)
+  const bufferFactor = Math.max(0, Math.min(0.85, cfg.gForceBuffer ?? 0.25));
+  st.g = 1.0 + (rawVertG - 1.0) * (1.0 - bufferFactor);
+  st.lat = rawLatG * (1.0 - bufferFactor);
 
   // Imperial speed in mph
   st.speed = Math.abs(st.v) * MPH_PER_MPS;
@@ -556,6 +582,7 @@ export function stepSim(st: SimState, track: BuiltTrack, dt: number, cfg: SimSet
       t: Math.round(st.runTime * 100) / 100,
       speed: Math.round(st.speed * 10) / 10,
       g: Math.round(st.g * 100) / 100,
+      lat: Math.round(st.lat * 100) / 100,
       height: Math.round(st.height),
       s: Math.round(st.s),
     });

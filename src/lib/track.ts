@@ -95,7 +95,7 @@ export const PIECE_DEFS: Record<PieceKind, PieceDef> = {
     hint: 'Banked left turn',
     target: 0,
     glyph: 'M3 18c6 0 12-4 18-12',
-    body: [{ len: 92, pitch: 0, yaw: -62 }],
+    body: [{ len: 104, pitch: 0, yaw: -54 }],
   },
   curveR: {
     label: 'Curve R',
@@ -103,7 +103,7 @@ export const PIECE_DEFS: Record<PieceKind, PieceDef> = {
     hint: 'Banked right turn',
     target: 0,
     glyph: 'M3 6c6 0 12 4 18 12',
-    body: [{ len: 92, pitch: 0, yaw: 62 }],
+    body: [{ len: 104, pitch: 0, yaw: 54 }],
   },
   hill: {
     label: 'Hill',
@@ -112,9 +112,9 @@ export const PIECE_DEFS: Record<PieceKind, PieceDef> = {
     target: 0,
     glyph: 'M2 19C8 19 8 6 12 6s4 13 10 13',
     body: [
-      { len: 38, pitch: 36, yaw: 0 },
-      { len: 124, pitch: -72, yaw: 0 },
-      { len: 38, pitch: 36, yaw: 0 },
+      { len: 42, pitch: 34, yaw: 0 },
+      { len: 136, pitch: -68, yaw: 0 },
+      { len: 42, pitch: 34, yaw: 0 },
     ],
   },
   valley: {
@@ -124,9 +124,9 @@ export const PIECE_DEFS: Record<PieceKind, PieceDef> = {
     target: 0,
     glyph: 'M2 6c6 0 6 13 10 13s4-13 10-13',
     body: [
-      { len: 38, pitch: -36, yaw: 0 },
-      { len: 124, pitch: 72, yaw: 0 },
-      { len: 38, pitch: -36, yaw: 0 },
+      { len: 42, pitch: -34, yaw: 0 },
+      { len: 140, pitch: 68, yaw: 0 },
+      { len: 42, pitch: -34, yaw: 0 },
     ],
   },
   loop: {
@@ -136,11 +136,11 @@ export const PIECE_DEFS: Record<PieceKind, PieceDef> = {
     target: 0,
     glyph: 'M2 18h4a6 6 0 1 1 6 0h6',
     body: [
-      { len: 18, pitch: 0, yaw: 0 },
-      { len: 62, pitch: 70, yaw: 0 },
-      { len: 92, pitch: 220, yaw: 0 },
-      { len: 62, pitch: 70, yaw: 0 },
-      { len: 18, pitch: 0, yaw: 0 },
+      { len: 22, pitch: 0, yaw: 0 },
+      { len: 74, pitch: 66, yaw: 0 },
+      { len: 86, pitch: 228, yaw: 0 },
+      { len: 74, pitch: 66, yaw: 0 },
+      { len: 22, pitch: 0, yaw: 0 },
     ],
   },
   zeroGRoll: {
@@ -150,9 +150,9 @@ export const PIECE_DEFS: Record<PieceKind, PieceDef> = {
     target: 0,
     glyph: 'M2 19c6 0 6-13 10-13s4 13 10 13 M8 12a4 4 0 1 0 8 0',
     body: [
-      { len: 34, pitch: 30, yaw: 0, roll: 70 },
-      { len: 76, pitch: -60, yaw: 0, roll: 220 },
-      { len: 34, pitch: 30, yaw: 0, roll: 70 },
+      { len: 36, pitch: 28, yaw: 0, roll: 70 },
+      { len: 82, pitch: -56, yaw: 0, roll: 220 },
+      { len: 36, pitch: 28, yaw: 0, roll: 70 },
     ],
   },
   corkscrew: {
@@ -232,9 +232,9 @@ export const PIECE_ORDER: PieceKind[] = [
 ];
 
 /** Physical conversion constants */
-export const METERS_PER_UNIT = 0.34;
+export const METERS_PER_UNIT = 0.44;
 export const FEET_PER_METER = 3.28084;
-export const FEET_PER_UNIT = METERS_PER_UNIT * FEET_PER_METER; // ~1.1155 ft per unit
+export const FEET_PER_UNIT = METERS_PER_UNIT * FEET_PER_METER; // ~1.4435 ft per unit
 export const MPH_PER_MPS = 2.236936; // 1 m/s = 2.23694 mph
 export const FT_PER_M = 3.28084;
 export const GRAVITY = 9.81;
@@ -304,7 +304,7 @@ export function segsFor(piece: Piece, entryPitch = 0): Seg[] {
   while (d < -180) d += 360;
 
   if (Math.abs(d) > 0.4) {
-    out.push({ len: Math.max(14, Math.abs(d) * 1.8), pitch: d, yaw: 0, roll: 0 });
+    out.push({ len: Math.max(22, Math.abs(d) * 2.2), pitch: d, yaw: 0, roll: 0 });
   }
 
   // Exact inversion elements (loops, zero-G rolls, corkscrews, immelmanns) maintain precision geometry
@@ -412,12 +412,12 @@ export function buildTrack(track: TrackDef): BuiltTrack {
 
   // ---- banking (baked from horizontal curvature + procedural roll twist) ---
   const raw = new Float32Array(n);
-  const vRef = 16; // m/s reference speed used to bake the banking
+  const vRef = 24; // m/s realistic mid-ride speed used to bake the banking (54 mph)
   for (let i = 0; i < n; i++) {
     const yawPerMeter = samples[i].yawRate / METERS_PER_UNIT;
-    raw[i] = clamp(Math.atan2(vRef * vRef * yawPerMeter, GRAVITY), -0.82, 0.82);
+    raw[i] = clamp(Math.atan2(vRef * vRef * yawPerMeter, GRAVITY), -1.05, 1.05);
   }
-  const win = 9;
+  const win = 12;
   for (let i = 0; i < n; i++) {
     let sum = 0;
     let cnt = 0;
