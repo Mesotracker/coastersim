@@ -117,48 +117,50 @@ export const INTENSITY_CONFIG: Record<
 // interpolated linearly between the knots, with G below the first knot
 // treated as indefinitely tolerable (Infinity).
 //
-// Sources / synthesis:
-//   +Gz (vertical, seated):  NASA/aviation G-tolerance charts, ASTM F2291-19
-//                            Annex A5 acceleration limits.
-//   -Gz (negative):          Aviation redout data, human -Gz tolerance studies.
-//   +Gy (lateral):           ASTM F2291 lateral acceleration limits, sled test
-//                            biomechanics literature.
+// Tuning philosophy: these are deliberately on the generous side of the
+// literature, since coasters are short-duration exposures and riders are
+// generally healthy. Real-world coasters regularly pull -1.5G ejector
+// airtime and +5G+ helices without incident, so the "infinite tolerance"
+// bands sit just above those numbers.
 
 type ToleranceCurve = ReadonlyArray<readonly [number, number]>;
 
+// +Gz (vertical, seated).  Below 4G is treated as indefinitely tolerable.
 const POSITIVE_G_CURVE: ToleranceCurve = [
-  [2.5, 120],
-  [3.0, 60],
-  [4.0, 20],
-  [5.0, 8],
-  [6.0, 4],
-  [7.0, 2],
-  [8.0, 1],
-  [9.0, 0.5],
-  [10.0, 0.25],
-  [12.0, 0.1],
-  [15.0, 0.05],
+  [4.0, 300],
+  [5.0, 90],
+  [6.0, 30],
+  [7.0, 12],
+  [8.0, 5],
+  [9.0, 2],
+  [10.0, 1],
+  [12.0, 0.4],
+  [15.0, 0.15],
 ];
 
+// -Gz (negative / ejector airtime).  Much more forgiving than the classical
+// aviation numbers: coasters routinely sustain -1.5G to -2G for a second
+// or more without any reported redout.  Below 3G is indefinitely tolerable.
 const NEGATIVE_G_CURVE: ToleranceCurve = [
-  [1.0, 120],
-  [1.5, 20],
-  [2.0, 6],
-  [2.5, 2.5],
-  [3.0, 1.2],
-  [3.5, 0.6],
-  [4.0, 0.3],
-  [5.0, 0.12],
+  [3.0, 300],
+  [4.0, 90],
+  [5.0, 30],
+  [6.0, 10],
+  [7.0, 3],
+  [8.0, 1],
+  [9.0, 0.4],
+  [10.0, 0.15],
 ];
 
+// +Gy (lateral shear).  Below 3G is indefinitely tolerable.
 const LATERAL_G_CURVE: ToleranceCurve = [
-  [1.0, 120],
-  [1.5, 30],
-  [2.0, 10],
-  [2.5, 4],
-  [3.0, 1.8],
-  [4.0, 0.8],
-  [5.0, 0.3],
+  [3.0, 300],
+  [4.0, 90],
+  [5.0, 30],
+  [6.0, 10],
+  [7.0, 3],
+  [8.0, 1],
+  [9.0, 0.4],
 ];
 
 /** Returns the number of seconds a rider can sustain `g` before hitting the limit. */
@@ -189,14 +191,14 @@ interface Excursion {
 /**
  * Walks a G-magnitude series and accumulates a running "tolerance fraction"
  * for each contiguous excursion above the curve threshold. Riders recover
- * while below threshold (default 0.5 tolerance per second), so brief spikes
+ * while below threshold (default 0.75 tolerance per second), so brief spikes
  * separated by low-G sections do not stack.
  */
 function scanExcursion(
   values: readonly number[],
   dt: number,
   curve: ToleranceCurve,
-  recoveryPerSec: number = 0.5,
+  recoveryPerSec: number = 0.75,
 ): Excursion {
   const threshold = curve[0][0];
 
@@ -282,6 +284,12 @@ function inferSampleDt(telemetry: TelemetryPoint[], fallback: number): number {
   return fallback;
 }
 
+// Tolerance-usage cutoffs for the three severity bands.  These are also
+// loosened relative to the strict 0.7 / 1.0 / 2.0 model.
+const WARN_TOLERANCE = 0.9;
+const CRITICAL_TOLERANCE = 1.4;
+const FATAL_TOLERANCE = 2.5;
+
 /**
  * Evaluates the full ride speed & acceleration telemetry and computes the
  * physiological intensity and medical hazard breakdown.
@@ -354,7 +362,7 @@ export function analyzeRideIntensity(
   const hazards: HazardWarning[] = [];
 
   // 1. Positive G (vertical / compression)
-  if (posEx.toleranceUsed >= 2.0) {
+  if (posEx.toleranceUsed >= FATAL_TOLERANCE) {
     hazards.push({
       type: 'crush',
       severity: 'fatal',
@@ -362,7 +370,7 @@ export function analyzeRideIntensity(
       detail: `Peak +${posEx.peakG.toFixed(1)}G held across ${posEx.durationSec.toFixed(1)}s of loaded track uses ${(posEx.toleranceUsed * 100).toFixed(0)}% of a rider's physiological tolerance — well past the failure point. Expect burst vertebral fractures and acute cardiac arrest from zero venous return.`,
       metric: `+${posEx.peakG.toFixed(1)}G × ${posEx.durationSec.toFixed(1)}s`,
     });
-  } else if (posEx.toleranceUsed >= 1.0) {
+  } else if (posEx.toleranceUsed >= CRITICAL_TOLERANCE) {
     hazards.push({
       type: 'blackout',
       severity: 'critical',
@@ -370,7 +378,7 @@ export function analyzeRideIntensity(
       detail: `Sustained +${posEx.peakG.toFixed(1)}G over ${posEx.durationSec.toFixed(1)}s drains arterial blood from the brain and eyes (${(posEx.toleranceUsed * 100).toFixed(0)}% of tolerance). Causes greyout, tunnel vision, and total loss of consciousness.`,
       metric: `+${posEx.peakG.toFixed(1)}G × ${posEx.durationSec.toFixed(1)}s`,
     });
-  } else if (posEx.toleranceUsed >= 0.7) {
+  } else if (posEx.toleranceUsed >= WARN_TOLERANCE) {
     hazards.push({
       type: 'blackout',
       severity: 'warning',
@@ -380,8 +388,9 @@ export function analyzeRideIntensity(
     });
   }
 
-  // 2. Negative G (airtime / redout)
-  if (negEx.toleranceUsed >= 2.0) {
+  // 2. Negative G (airtime / redout) — deliberately lax.  Ejector airtime
+  //    regularly reaches -1.5G to -2G on commercial rides without incident.
+  if (negEx.toleranceUsed >= FATAL_TOLERANCE) {
     hazards.push({
       type: 'redout',
       severity: 'fatal',
@@ -389,7 +398,7 @@ export function analyzeRideIntensity(
       detail: `Peak ${(-negEx.peakG).toFixed(1)}G held across ${negEx.durationSec.toFixed(1)}s produces extreme cephalic intravascular hypertension (${(negEx.toleranceUsed * 100).toFixed(0)}% of tolerance). Risks hemorrhagic stroke and retinal detachment.`,
       metric: `${(-negEx.peakG).toFixed(1)}G × ${negEx.durationSec.toFixed(1)}s`,
     });
-  } else if (negEx.toleranceUsed >= 1.0) {
+  } else if (negEx.toleranceUsed >= CRITICAL_TOLERANCE) {
     hazards.push({
       type: 'redout',
       severity: 'critical',
@@ -397,7 +406,7 @@ export function analyzeRideIntensity(
       detail: `Sustained ${(-negEx.peakG).toFixed(1)}G for ${negEx.durationSec.toFixed(1)}s forces blood into the eyes and cranium (${(negEx.toleranceUsed * 100).toFixed(0)}% of tolerance), rupturing facial capillaries and causing severe retinal redout.`,
       metric: `${(-negEx.peakG).toFixed(1)}G × ${negEx.durationSec.toFixed(1)}s`,
     });
-  } else if (negEx.toleranceUsed >= 0.7) {
+  } else if (negEx.toleranceUsed >= WARN_TOLERANCE) {
     hazards.push({
       type: 'redout',
       severity: 'warning',
@@ -408,7 +417,7 @@ export function analyzeRideIntensity(
   }
 
   // 3. Lateral G (whiplash / shear)
-  if (latTol >= 2.0) {
+  if (latTol >= FATAL_TOLERANCE) {
     hazards.push({
       type: 'whiplash',
       severity: 'fatal',
@@ -416,7 +425,7 @@ export function analyzeRideIntensity(
       detail: `${latG.toFixed(1)}G unbanked lateral load held over a multi-second turn uses ${(latTol * 100).toFixed(0)}% of rider tolerance. Risks atlanto-occipital dislocation and brainstem injury.`,
       metric: `${latG.toFixed(1)}G Lateral`,
     });
-  } else if (latTol >= 1.0) {
+  } else if (latTol >= CRITICAL_TOLERANCE) {
     hazards.push({
       type: 'whiplash',
       severity: 'critical',
@@ -424,7 +433,7 @@ export function analyzeRideIntensity(
       detail: `${latG.toFixed(1)}G lateral force exceeds sustainable neck loading (${(latTol * 100).toFixed(0)}% of tolerance), risking cervical ligament tears and head-restraint trauma.`,
       metric: `${latG.toFixed(1)}G Lateral`,
     });
-  } else if (latTol >= 0.7) {
+  } else if (latTol >= WARN_TOLERANCE) {
     hazards.push({
       type: 'whiplash',
       severity: 'warning',
@@ -435,11 +444,11 @@ export function analyzeRideIntensity(
   }
 
   // 4. High-velocity kinetic stress
-  if (maxSpeed >= 140 && (maxPosG > 6.5 || latG > 2.5)) {
+  if (maxSpeed >= 160 && (maxPosG > 8.0 || latG > 3.5)) {
     hazards.push({
       type: 'jerk',
       severity: 'warning',
-      title: 'Extreme Kinetic Stress (140+ mph)',
+      title: 'Extreme Kinetic Stress (160+ mph)',
       detail: `At ${maxSpeed.toFixed(0)} mph, minute track curvature variations exert massive kinetic shockwaves on train bogies and riders.`,
       metric: `${maxSpeed.toFixed(0)} mph`,
     });
@@ -466,13 +475,13 @@ export function analyzeRideIntensity(
     recommendation =
       'Add trim brakes, increase curve radius, or increase heartline banking to bring forces into the safe zone.';
   } else if (
-    maxPosG >= 5.5 ||
-    posEx.toleranceUsed >= 0.7 ||
-    negG <= -1.2 ||
-    negEx.toleranceUsed >= 0.7 ||
-    latG >= 2.0 ||
-    latTol >= 0.7 ||
-    maxSpeed >= 100
+    maxPosG >= 6.5 ||
+    posEx.toleranceUsed >= WARN_TOLERANCE ||
+    negG <= -2.5 ||
+    negEx.toleranceUsed >= WARN_TOLERANCE ||
+    latG >= 3.0 ||
+    latTol >= WARN_TOLERANCE ||
+    maxSpeed >= 120
   ) {
     level = 'extreme';
     description =
@@ -480,16 +489,16 @@ export function analyzeRideIntensity(
     recommendation =
       'Forces are within expert thrill limits. Ensure proper over-the-shoulder or high-retention lap bar restraints.';
   } else if (
-    maxPosG >= 4.0 ||
-    negG <= -0.2 ||
-    latG >= 1.3 ||
-    maxSpeed >= 70
+    maxPosG >= 4.5 ||
+    negG <= -1.0 ||
+    latG >= 2.0 ||
+    maxSpeed >= 85
   ) {
     level = 'intense';
     description =
       'Energetic and thrilling coaster featuring forceful inversions, firm positive Gs, and clean ejector/floater airtime.';
     recommendation = 'Excellent balance of thrill, comfort, and pacing.';
-  } else if (maxPosG >= 2.8 || maxSpeed >= 45 || trackLengthFt > 1000) {
+  } else if (maxPosG >= 3.2 || maxSpeed >= 55 || trackLengthFt > 1200) {
     level = 'moderate';
     description =
       'Moderate family thrill coaster. Accessible drops, sweeping banks, and gentle floater airtime without disorienting forces.';
