@@ -152,7 +152,10 @@ export default function SpeedGraph({
 
         // Trigger PNG download
         canvas.toBlob((blob) => {
-          if (!blob) return;
+          if (!blob) {
+            setExporting(null);
+            return;
+          }
           const a = document.createElement('a');
           a.download = `coaster-speed-profile-${new Date().toISOString().slice(0, 10)}.png`;
           a.href = URL.createObjectURL(blob);
@@ -162,6 +165,10 @@ export default function SpeedGraph({
           setExporting('PNG downloaded!');
           setTimeout(() => setExporting(null), 2200);
         }, 'image/png');
+      };
+      img.onerror = () => {
+        DOMURL.revokeObjectURL(url);
+        setExporting(null);
       };
       img.src = url;
     } catch {

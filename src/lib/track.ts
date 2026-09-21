@@ -294,7 +294,7 @@ function cross3(a: number[], b: number[]) {
  * don't generate massive multi-hundred-unit reverse-pitch transition loops.
  */
 export function segsFor(piece: Piece, entryPitch = 0): Seg[] {
-  const def = PIECE_DEFS[piece.kind];
+  const def = PIECE_DEFS[piece.kind] || PIECE_DEFS.straight;
   const out: Seg[] = [];
   const target = clamp(def.target * (def.targetScales ? piece.power : 1) + piece.rot, -82, 82);
 
@@ -363,7 +363,7 @@ export function buildTrack(track: TrackDef): BuiltTrack {
 
   for (let pi = 0; pi < track.pieces.length; pi++) {
     const piece = track.pieces[pi];
-    const def = PIECE_DEFS[piece.kind];
+    const def = PIECE_DEFS[piece.kind] || PIECE_DEFS.straight;
     const special = def.special ?? 0;
     const start = samples.length;
 

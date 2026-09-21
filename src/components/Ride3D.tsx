@@ -146,7 +146,8 @@ export default function Ride3D({
 
   // ------------------------------------------------------------------ setup
   useEffect(() => {
-    const wrap = wrapRef.current!;
+    const wrap = wrapRef.current;
+    if (!wrap) return;
     const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
     renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
     renderer.toneMapping = THREE.ACESFilmicToneMapping;

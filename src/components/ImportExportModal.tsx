@@ -45,7 +45,80 @@ interface Props {
     settings?: SimSettings;
     theme?: Theme;
     name?: string;
+    isSettingsOnly?: boolean;
   }) => void;
+}
+
+function normalizePieceKind(raw: any): PieceKind {
+  if (typeof raw !== 'string') return 'straight';
+  const clean = raw.toLowerCase().replace(/[-_\s]/g, '');
+  switch (clean) {
+    case 'straight':
+    case 'flat':
+      return 'straight';
+    case 'up':
+    case 'climb':
+    case 'lift':
+    case 'lifthill':
+      return 'up';
+    case 'down':
+    case 'drop':
+    case 'dive':
+      return 'down';
+    case 'curvel':
+    case 'left':
+    case 'turnleft':
+      return 'curveL';
+    case 'curver':
+    case 'right':
+    case 'turnright':
+      return 'curveR';
+    case 'hill':
+    case 'camelback':
+    case 'airtimehill':
+      return 'hill';
+    case 'valley':
+    case 'dip':
+      return 'valley';
+    case 'loop':
+    case 'verticalloop':
+      return 'loop';
+    case 'zerogroll':
+    case 'zerog':
+    case 'barrelroll':
+      return 'zeroGRoll';
+    case 'corkscrew':
+    case 'screw':
+      return 'corkscrew';
+    case 'immelmann':
+    case 'immelman':
+      return 'immelmann';
+    case 'jump':
+    case 'gap':
+    case 'airjump':
+      return 'jump';
+    case 'boost':
+    case 'booster':
+    case 'launch':
+    case 'lsm':
+      return 'boost';
+    case 'brake':
+    case 'brakes':
+    case 'trim':
+      return 'brake';
+    default:
+      return 'straight';
+  }
+}
+
+function cleanJsonString(raw: string): string {
+  let text = raw.replace(/^\uFEFF/, '').trim();
+  if (text.startsWith('```')) {
+    text = text.replace(/^```[a-zA-Z]*\n?/, '').replace(/\n?```$/, '').trim();
+  }
+  // Strip trailing commas before } or ]
+  text = text.replace(/,\s*([\]}])/g, '$1');
+  return text;
 }
 
 export default function ImportExportModal({
@@ -161,7 +234,8 @@ export default function ImportExportModal({
       return null;
     }
     try {
-      const parsed = JSON.parse(rawText);
+      const cleaned = cleanJsonString(rawText);
+      const parsed = JSON.parse(cleaned);
 
       // Case 0: Standalone Physics Settings JSON
       if (
@@ -179,7 +253,7 @@ export default function ImportExportModal({
         };
       }
 
-      let targetTrack: TrackDef | null = null;
+      let targetTrack: { origin?: any; startPitch?: any; pieces: any[] } | null = null;
       let targetSettings: SimSettings | undefined;
       let targetTheme: Theme | undefined;
       let importedName: string | undefined;
@@ -194,12 +268,23 @@ export default function ImportExportModal({
       // Case 2: Bare TrackDef ({ origin, startPitch, pieces })
       else if (Array.isArray(parsed.pieces)) {
         targetTrack = {
-          origin: parsed.origin || { x: 0, y: 30 },
-          startPitch: typeof parsed.startPitch === 'number' ? parsed.startPitch : 0,
+          origin: parsed.origin,
+          startPitch: parsed.startPitch,
           pieces: parsed.pieces,
         };
+        targetSettings = parsed.settings;
+        targetTheme = parsed.theme;
+        importedName = parsed.name;
+      }
+      // Case 3: Direct Array of pieces [ { kind: 'straight' }, ... ] or [ "straight", "loop", ... ]
+      else if (Array.isArray(parsed)) {
+        targetTrack = {
+          origin: { x: 0, y: 30 },
+          startPitch: 0,
+          pieces: parsed,
+        };
       } else {
-        setImportError('Invalid JSON structure: could not locate "pieces" or physics "settings" in data.');
+        setImportError('Invalid JSON format: could not locate track "pieces" or physics "settings".');
         return null;
       }
 
@@ -209,31 +294,28 @@ export default function ImportExportModal({
       }
 
       // Sanitize pieces
-      const validKinds: Set<string> = new Set([
-        'straight',
-        'up',
-        'down',
-        'hill',
-        'valley',
-        'curveL',
-        'curveR',
-        'loop',
-        'zeroGRoll',
-        'corkscrew',
-        'immelmann',
-        'jump',
-        'boost',
-        'brake',
-      ]);
-
       const sanitizedPieces: Piece[] = targetTrack.pieces.map((p: any, idx: number) => {
-        const kind: PieceKind = validKinds.has(p.kind) ? p.kind : 'straight';
+        if (typeof p === 'string') {
+          return {
+            id: `imp_${idx}_${Math.random().toString(36).slice(2, 6)}`,
+            kind: normalizePieceKind(p),
+            len: 1,
+            power: 1,
+            rot: 0,
+          };
+        }
+        const rawKind = p?.kind || p?.type || 'straight';
+        const kind = normalizePieceKind(rawKind);
+        const lenVal = typeof p?.len === 'number' ? p.len : parseFloat(p?.len);
+        const powerVal = typeof p?.power === 'number' ? p.power : parseFloat(p?.power);
+        const rotVal = typeof p?.rot === 'number' ? p.rot : parseFloat(p?.rot);
+
         return {
-          id: p.id || `imp_${idx}_${Math.random().toString(36).slice(2, 6)}`,
+          id: p?.id || `imp_${idx}_${Math.random().toString(36).slice(2, 6)}`,
           kind,
-          len: typeof p.len === 'number' && p.len > 0.1 ? Math.min(3, p.len) : 1,
-          power: typeof p.power === 'number' && p.power > 0.1 ? Math.min(2.5, p.power) : 1,
-          rot: typeof p.rot === 'number' ? Math.max(-90, Math.min(90, p.rot)) : 0,
+          len: !isNaN(lenVal) && lenVal > 0.1 ? Math.min(3, Math.max(0.2, lenVal)) : 1,
+          power: !isNaN(powerVal) && powerVal > 0.1 ? Math.min(2.5, Math.max(0.1, powerVal)) : 1,
+          rot: !isNaN(rotVal) ? Math.max(-90, Math.min(90, rotVal)) : 0,
         };
       });
 
@@ -242,12 +324,21 @@ export default function ImportExportModal({
         return null;
       }
 
+      let originX = 0;
+      let originY = 30;
+      if (targetTrack.origin) {
+        if (Array.isArray(targetTrack.origin)) {
+          originX = Number(targetTrack.origin[0]) || 0;
+          originY = Number(targetTrack.origin[1]) || 30;
+        } else {
+          originX = typeof targetTrack.origin.x === 'number' ? targetTrack.origin.x : (parseFloat(targetTrack.origin.x) || 0);
+          originY = typeof targetTrack.origin.y === 'number' ? targetTrack.origin.y : (parseFloat(targetTrack.origin.y) || 30);
+        }
+      }
+
       const finalTrack: TrackDef = {
-        origin: {
-          x: typeof targetTrack.origin?.x === 'number' ? targetTrack.origin.x : 0,
-          y: typeof targetTrack.origin?.y === 'number' ? targetTrack.origin.y : 30,
-        },
-        startPitch: typeof targetTrack.startPitch === 'number' ? targetTrack.startPitch : 0,
+        origin: { x: originX, y: originY },
+        startPitch: typeof targetTrack.startPitch === 'number' ? targetTrack.startPitch : (parseFloat(targetTrack.startPitch) || 0),
         pieces: sanitizedPieces,
       };
 

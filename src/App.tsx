@@ -404,7 +404,18 @@ export default function App() {
   }, []);
 
   const handleImportCoaster = useCallback(
-    (data: { track: TrackDef; settings?: SimSettings; theme?: Theme; name?: string }) => {
+    (data: {
+      track: TrackDef;
+      settings?: SimSettings;
+      theme?: Theme;
+      name?: string;
+      isSettingsOnly?: boolean;
+    }) => {
+      if (data.isSettingsOnly && data.settings) {
+        setSettings(data.settings);
+        showToast(`Applied physics settings: ${data.name || 'Custom Physics'}`);
+        return;
+      }
       pushHistory(track);
       setTrack(data.track);
       if (data.settings) setSettings(data.settings);
@@ -486,6 +497,29 @@ export default function App() {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [deletePiece, restart, selected, showToast, track.pieces, undo, updatePiece]);
+
+  // Global drag-and-drop support for coaster .json files
+  useEffect(() => {
+    const onDragOver = (e: DragEvent) => {
+      if (e.dataTransfer && Array.from(e.dataTransfer.types).includes('Files')) {
+        e.preventDefault();
+      }
+    };
+    const onDrop = (e: DragEvent) => {
+      const file = e.dataTransfer?.files?.[0];
+      if (file && (file.name.endsWith('.json') || file.type.includes('json'))) {
+        e.preventDefault();
+        setImportExportMode('import');
+        setImportExportOpen(true);
+      }
+    };
+    window.addEventListener('dragover', onDragOver);
+    window.addEventListener('drop', onDrop);
+    return () => {
+      window.removeEventListener('dragover', onDragOver);
+      window.removeEventListener('drop', onDrop);
+    };
+  }, []);
 
   // Imperial unit metrics
   const lengthFt = built.length * FEET_PER_UNIT;
@@ -608,17 +642,17 @@ export default function App() {
           </div>
 
           {/* Import / Export JSON Buttons */}
-          <div className="hidden xl:flex items-center gap-1 rounded-xl border border-slate-200 bg-white p-0.5 shadow-xs">
+          <div className="flex items-center gap-0.5 sm:gap-1 rounded-xl border border-slate-200 bg-white p-0.5 shadow-xs">
             <button
               onClick={() => {
                 setImportExportMode('import');
                 setImportExportOpen(true);
               }}
               title="Import Coaster Track (.json)"
-              className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-bold text-slate-700 transition hover:bg-slate-100"
+              className="flex items-center gap-1 sm:gap-1.5 rounded-lg px-2 sm:px-2.5 py-1.5 text-xs font-bold text-slate-700 transition hover:bg-slate-100"
             >
               <Upload className="h-3.5 w-3.5 text-blue-600" />
-              <span>Import</span>
+              <span className="hidden sm:inline">Import</span>
             </button>
             <button
               onClick={() => {
@@ -626,10 +660,10 @@ export default function App() {
                 setImportExportOpen(true);
               }}
               title="Export Coaster Track (.json)"
-              className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-bold text-slate-700 transition hover:bg-slate-100"
+              className="flex items-center gap-1 sm:gap-1.5 rounded-lg px-2 sm:px-2.5 py-1.5 text-xs font-bold text-slate-700 transition hover:bg-slate-100"
             >
               <Download className="h-3.5 w-3.5 text-emerald-600" />
-              <span>Export</span>
+              <span className="hidden sm:inline">Export</span>
             </button>
           </div>
 
