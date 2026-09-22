@@ -31,6 +31,7 @@ export interface PhysicsSettingsExport {
 interface Props {
   isOpen: boolean;
   initialMode: 'export' | 'import';
+  initialImportText?: string;
   onClose: () => void;
   track: TrackDef;
   settings: SimSettings;
@@ -52,78 +53,133 @@ interface Props {
 function normalizePieceKind(raw: any): PieceKind {
   if (typeof raw !== 'string') return 'straight';
   const clean = raw.toLowerCase().replace(/[-_\s]/g, '');
-  switch (clean) {
-    case 'straight':
-    case 'flat':
-      return 'straight';
-    case 'up':
-    case 'climb':
-    case 'lift':
-    case 'lifthill':
-      return 'up';
-    case 'down':
-    case 'drop':
-    case 'dive':
-      return 'down';
-    case 'curvel':
-    case 'left':
-    case 'turnleft':
-      return 'curveL';
-    case 'curver':
-    case 'right':
-    case 'turnright':
-      return 'curveR';
-    case 'hill':
-    case 'camelback':
-    case 'airtimehill':
-      return 'hill';
-    case 'valley':
-    case 'dip':
-      return 'valley';
-    case 'loop':
-    case 'verticalloop':
-      return 'loop';
-    case 'zerogroll':
-    case 'zerog':
-    case 'barrelroll':
-      return 'zeroGRoll';
-    case 'corkscrew':
-    case 'screw':
-      return 'corkscrew';
-    case 'immelmann':
-    case 'immelman':
-      return 'immelmann';
-    case 'jump':
-    case 'gap':
-    case 'airjump':
-      return 'jump';
-    case 'boost':
-    case 'booster':
-    case 'launch':
-    case 'lsm':
-      return 'boost';
-    case 'brake':
-    case 'brakes':
-    case 'trim':
-      return 'brake';
-    default:
-      return 'straight';
+
+  if (/^(straight|flat|level|station|platform|track)$/.test(clean)) return 'straight';
+  if (/^(up|lift|chain|chainlift|climb|incline|ascent|steepup)$/.test(clean)) return 'up';
+  if (/^(down|drop|dive|descent|decline|steepdown)$/.test(clean)) return 'down';
+  if (/^(curvel|left|turnleft|turnl|bankleft|curveleft)$/.test(clean)) return 'curveL';
+  if (/^(curver|right|turnright|turnr|bankright|curveright)$/.test(clean)) return 'curveR';
+  if (/^(hill|camelback|airtime|airtimehill|crest|bunnyhop|hop)$/.test(clean)) return 'hill';
+  if (/^(valley|dip|trough|compression|bottom)$/.test(clean)) return 'valley';
+  if (/^(loop|verticalloop|vertical_loop|inversion|looping)$/.test(clean)) return 'loop';
+  if (/^(zerogroll|zerog|barrelroll|roll|heartline|heartlineroll|inlineroll|inline)$/.test(clean)) return 'zeroGRoll';
+  if (/^(corkscrew|cork_screw|screw|flatspin)$/.test(clean)) return 'corkscrew';
+  if (/^(immelmann|immelman|diveloop|dive_loop|halfloop)$/.test(clean)) return 'immelmann';
+  if (/^(jump|airjump|gap)$/.test(clean)) return 'jump';
+  if (/^(boost|booster|launch|lsm|accelerator|acceleration)$/.test(clean)) return 'boost';
+  if (/^(brake|brakes|trim|trimbrake|stationbrake|finbrake)$/.test(clean)) return 'brake';
+
+  return 'straight';
+}
+
+function parseJsonLenient(raw: string): any {
+  let text = raw.replace(/^\uFEFF/, '').trim();
+  // Strip markdown code fences
+  if (text.startsWith('```')) {
+    text = text.replace(/^```[a-zA-Z0-9_-]*\s*\n?/, '').replace(/\n?```\s*$/, '').trim();
+  }
+  // Strip comments
+  text = text.replace(/\/\*[\s\S]*?\*\//g, '');
+  text = text.replace(/(^|[^:])\/\/[^\n]*/g, '$1');
+  // Strip trailing commas before closing braces or brackets
+  text = text.replace(/,\s*([\]}])/g, '$1');
+
+  try {
+    return JSON.parse(text);
+  } catch (err1) {
+    try {
+      // Attempt relaxed JSON: convert unquoted keys and single quotes
+      const relaxed = text
+        .replace(/([{,]\s*)([a-zA-Z0-9_$]+)\s*:/g, '$1"$2":')
+        .replace(/:\s*'([^']*)'/g, ':"$1"')
+        .replace(/,\s*([\]}])/g, '$1');
+      return JSON.parse(relaxed);
+    } catch {
+      throw err1;
+    }
   }
 }
 
-function cleanJsonString(raw: string): string {
-  let text = raw.replace(/^\uFEFF/, '').trim();
-  if (text.startsWith('```')) {
-    text = text.replace(/^```[a-zA-Z]*\n?/, '').replace(/\n?```$/, '').trim();
-  }
-  // Strip trailing commas before } or ]
-  text = text.replace(/,\s*([\]}])/g, '$1');
-  return text;
-}
+const SAMPLE_COASTERS = [
+  {
+    name: 'Giga Hyperion (Airtime Monster)',
+    json: JSON.stringify(
+      {
+        format: 'coaster-forge',
+        name: 'Giga Hyperion',
+        track: {
+          origin: { x: 0, y: 35 },
+          startPitch: 0,
+          pieces: [
+            { kind: 'straight', len: 1.0 },
+            { kind: 'up', len: 1.3, power: 1.2 },
+            { kind: 'up', len: 1.3, power: 1.2 },
+            { kind: 'up', len: 1.3, power: 1.2 },
+            { kind: 'down', len: 1.4, power: 1.5 },
+            { kind: 'down', len: 1.4, power: 1.5 },
+            { kind: 'valley', len: 1.2 },
+            { kind: 'hill', len: 1.4, power: 1.2 },
+            { kind: 'valley', len: 1.1 },
+            { kind: 'curveR', len: 1.2, power: 1.1 },
+            { kind: 'curveR', len: 1.2, power: 1.1 },
+            { kind: 'hill', len: 1.3, power: 1.15 },
+            { kind: 'valley', len: 1.0 },
+            { kind: 'curveL', len: 1.2, power: 1.1 },
+            { kind: 'curveL', len: 1.2, power: 1.1 },
+            { kind: 'hill', len: 1.1 },
+            { kind: 'brake', len: 1.3 },
+            { kind: 'straight', len: 1.0 },
+          ],
+        },
+        settings: {
+          friction: 0.006,
+          drag: 0.00035,
+          gravity: 9.81,
+          trainMassKg: 5000,
+          gBuffer: 1.8,
+          material: 'metal',
+        },
+      },
+      null,
+      2,
+    ),
+  },
+  {
+    name: 'Vortex Viper (Multi-Inversion)',
+    json: JSON.stringify(
+      {
+        format: 'coaster-forge',
+        name: 'Vortex Viper',
+        track: {
+          origin: { x: 0, y: 30 },
+          startPitch: 0,
+          pieces: [
+            { kind: 'straight', len: 1.0 },
+            { kind: 'boost', len: 1.4 },
+            { kind: 'up', len: 1.2, power: 1.4 },
+            { kind: 'down', len: 1.2, power: 1.4 },
+            { kind: 'valley', len: 1.1 },
+            { kind: 'loop', len: 1.1 },
+            { kind: 'immelmann', len: 1.1 },
+            { kind: 'curveL', len: 1.2, power: 1.1 },
+            { kind: 'curveL', len: 1.2, power: 1.1 },
+            { kind: 'zeroGRoll', len: 1.0 },
+            { kind: 'corkscrew', len: 1.0 },
+            { kind: 'brake', len: 1.4 },
+            { kind: 'straight', len: 1.0 },
+          ],
+        },
+      },
+      null,
+      2,
+    ),
+  },
+];
 
 export default function ImportExportModal({
   isOpen,
   initialMode,
+  initialImportText,
   onClose,
   track,
   settings,
@@ -136,7 +192,7 @@ export default function ImportExportModal({
   const [includeSettings, setIncludeSettings] = useState(true);
   const [includeTheme, setIncludeTheme] = useState(true);
   const [copied, setCopied] = useState(false);
-  const [pasteText, setPasteText] = useState('');
+  const [pasteText, setPasteText] = useState(initialImportText || '');
   const [importError, setImportError] = useState<string | null>(null);
   const [isDragOver, setIsDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -145,10 +201,10 @@ export default function ImportExportModal({
     if (isOpen) {
       setMode(initialMode);
       setCopied(false);
-      setPasteText('');
+      setPasteText(initialImportText || '');
       setImportError(null);
     }
-  }, [isOpen, initialMode]);
+  }, [isOpen, initialMode, initialImportText]);
 
   // Generate full export project
   const exportJson = useMemo(() => {
@@ -234,67 +290,114 @@ export default function ImportExportModal({
       return null;
     }
     try {
-      const cleaned = cleanJsonString(rawText);
-      const parsed = JSON.parse(cleaned);
-
-      // Case 0: Standalone Physics Settings JSON
-      if (
-        parsed.format === 'coaster-physics-settings' ||
-        (parsed.settings && typeof parsed.settings.friction === 'number') ||
-        (typeof parsed.friction === 'number' && typeof parsed.gravity === 'number')
-      ) {
-        const targetSettings: SimSettings = parsed.settings || parsed;
-        return {
-          track,
-          settings: targetSettings,
-          theme: undefined,
-          name: parsed.name || 'Custom Physics Settings',
-          isSettingsOnly: true,
-        };
+      const parsed = parseJsonLenient(rawText);
+      if (!parsed || typeof parsed !== 'object') {
+        setImportError('Invalid JSON format: expected a JSON object or array.');
+        return null;
       }
 
-      let targetTrack: { origin?: any; startPitch?: any; pieces: any[] } | null = null;
-      let targetSettings: SimSettings | undefined;
-      let targetTheme: Theme | undefined;
-      let importedName: string | undefined;
+      // Step 1: Detect track pieces first across all possible structures!
+      let rawPieces: any[] | null = null;
+      let targetTrackOrigin: any = null;
+      let targetStartPitch: any = null;
+      let targetSettings: SimSettings | undefined = undefined;
+      let targetTheme: Theme | undefined = undefined;
+      let importedName: string | undefined = undefined;
 
-      // Case 1: Full CoasterProject format
+      // Check standard format: { track: { pieces: [...] }, ... }
       if (parsed.track && Array.isArray(parsed.track.pieces)) {
-        targetTrack = parsed.track;
+        rawPieces = parsed.track.pieces;
+        targetTrackOrigin = parsed.track.origin;
+        targetStartPitch = parsed.track.startPitch;
         targetSettings = parsed.settings;
         targetTheme = parsed.theme;
         importedName = parsed.name;
       }
-      // Case 2: Bare TrackDef ({ origin, startPitch, pieces })
+      // Check bare track: { pieces: [...] }
       else if (Array.isArray(parsed.pieces)) {
-        targetTrack = {
-          origin: parsed.origin,
-          startPitch: parsed.startPitch,
-          pieces: parsed.pieces,
-        };
+        rawPieces = parsed.pieces;
+        targetTrackOrigin = parsed.origin;
+        targetStartPitch = parsed.startPitch;
         targetSettings = parsed.settings;
         targetTheme = parsed.theme;
         importedName = parsed.name;
       }
-      // Case 3: Direct Array of pieces [ { kind: 'straight' }, ... ] or [ "straight", "loop", ... ]
+      // Check direct array of pieces: [ ... ]
       else if (Array.isArray(parsed)) {
-        targetTrack = {
-          origin: { x: 0, y: 30 },
-          startPitch: 0,
-          pieces: parsed,
-        };
-      } else {
-        setImportError('Invalid JSON format: could not locate track "pieces" or physics "settings".');
+        rawPieces = parsed;
+      }
+      // Check nested coaster object: { coaster: { track: { pieces: [...] } } } or { coaster: { pieces: [...] } }
+      else if (parsed.coaster) {
+        if (parsed.coaster.track && Array.isArray(parsed.coaster.track.pieces)) {
+          rawPieces = parsed.coaster.track.pieces;
+          targetTrackOrigin = parsed.coaster.track.origin;
+          targetStartPitch = parsed.coaster.track.startPitch;
+        } else if (Array.isArray(parsed.coaster.pieces)) {
+          rawPieces = parsed.coaster.pieces;
+          targetTrackOrigin = parsed.coaster.origin;
+          targetStartPitch = parsed.coaster.startPitch;
+        } else if (Array.isArray(parsed.coaster)) {
+          rawPieces = parsed.coaster;
+        }
+        targetSettings = parsed.settings || parsed.coaster.settings;
+        targetTheme = parsed.theme || parsed.coaster.theme;
+        importedName = parsed.name || parsed.coaster.name;
+      }
+      // Check elements or segments or layout: { elements: [...] } or { segments: [...] }
+      else if (Array.isArray(parsed.elements)) {
+        rawPieces = parsed.elements;
+        targetTrackOrigin = parsed.origin;
+        targetStartPitch = parsed.startPitch;
+        targetSettings = parsed.settings;
+        targetTheme = parsed.theme;
+        importedName = parsed.name;
+      } else if (Array.isArray(parsed.segments)) {
+        rawPieces = parsed.segments;
+        targetTrackOrigin = parsed.origin;
+        targetStartPitch = parsed.startPitch;
+        targetSettings = parsed.settings;
+        targetTheme = parsed.theme;
+        importedName = parsed.name;
+      } else if (Array.isArray(parsed.layout)) {
+        rawPieces = parsed.layout;
+        targetTrackOrigin = parsed.origin;
+        targetStartPitch = parsed.startPitch;
+        targetSettings = parsed.settings;
+        targetTheme = parsed.theme;
+        importedName = parsed.name;
+      } else if (parsed.data && Array.isArray(parsed.data.pieces)) {
+        rawPieces = parsed.data.pieces;
+        targetTrackOrigin = parsed.data.origin;
+        targetStartPitch = parsed.data.startPitch;
+        targetSettings = parsed.settings || parsed.data.settings;
+        targetTheme = parsed.theme || parsed.data.theme;
+        importedName = parsed.name || parsed.data.name;
+      }
+
+      // Step 2: If NO track pieces found, check if this is a Standalone Physics Settings file
+      if (!rawPieces || rawPieces.length === 0) {
+        const isPhysicsSettings =
+          parsed.format === 'coaster-physics-settings' ||
+          (parsed.settings && typeof parsed.settings.friction === 'number') ||
+          (typeof parsed.friction === 'number' && typeof parsed.gravity === 'number');
+
+        if (isPhysicsSettings) {
+          const physSettings: SimSettings = parsed.settings || parsed;
+          return {
+            track,
+            settings: physSettings,
+            theme: undefined,
+            name: parsed.name || 'Custom Physics Settings',
+            isSettingsOnly: true,
+          };
+        }
+
+        setImportError('Invalid coaster JSON: Could not find any track "pieces" or physics "settings".');
         return null;
       }
 
-      if (!targetTrack) {
-        setImportError('Invalid coaster track definition.');
-        return null;
-      }
-
-      // Sanitize pieces
-      const sanitizedPieces: Piece[] = targetTrack.pieces.map((p: any, idx: number) => {
+      // Step 3: Sanitize and normalize all pieces
+      const sanitizedPieces: Piece[] = rawPieces.map((p: any, idx: number) => {
         if (typeof p === 'string') {
           return {
             id: `imp_${idx}_${Math.random().toString(36).slice(2, 6)}`,
@@ -304,14 +407,14 @@ export default function ImportExportModal({
             rot: 0,
           };
         }
-        const rawKind = p?.kind || p?.type || 'straight';
+        const rawKind = p?.kind || p?.type || p?.piece || p?.element || 'straight';
         const kind = normalizePieceKind(rawKind);
-        const lenVal = typeof p?.len === 'number' ? p.len : parseFloat(p?.len);
-        const powerVal = typeof p?.power === 'number' ? p.power : parseFloat(p?.power);
-        const rotVal = typeof p?.rot === 'number' ? p.rot : parseFloat(p?.rot);
+        const lenVal = typeof p?.len === 'number' ? p.len : parseFloat(p?.len ?? p?.length ?? p?.scale);
+        const powerVal = typeof p?.power === 'number' ? p.power : parseFloat(p?.power ?? p?.pitch ?? p?.intensity);
+        const rotVal = typeof p?.rot === 'number' ? p.rot : parseFloat(p?.rot ?? p?.rotation ?? p?.yaw ?? p?.angle);
 
         return {
-          id: p?.id || `imp_${idx}_${Math.random().toString(36).slice(2, 6)}`,
+          id: p?.id ? String(p.id) : `imp_${idx}_${Math.random().toString(36).slice(2, 6)}`,
           kind,
           len: !isNaN(lenVal) && lenVal > 0.1 ? Math.min(3, Math.max(0.2, lenVal)) : 1,
           power: !isNaN(powerVal) && powerVal > 0.1 ? Math.min(2.5, Math.max(0.1, powerVal)) : 1,
@@ -326,19 +429,19 @@ export default function ImportExportModal({
 
       let originX = 0;
       let originY = 30;
-      if (targetTrack.origin) {
-        if (Array.isArray(targetTrack.origin)) {
-          originX = Number(targetTrack.origin[0]) || 0;
-          originY = Number(targetTrack.origin[1]) || 30;
+      if (targetTrackOrigin) {
+        if (Array.isArray(targetTrackOrigin)) {
+          originX = Number(targetTrackOrigin[0]) || 0;
+          originY = Number(targetTrackOrigin[1]) || 30;
         } else {
-          originX = typeof targetTrack.origin.x === 'number' ? targetTrack.origin.x : (parseFloat(targetTrack.origin.x) || 0);
-          originY = typeof targetTrack.origin.y === 'number' ? targetTrack.origin.y : (parseFloat(targetTrack.origin.y) || 30);
+          originX = typeof targetTrackOrigin.x === 'number' ? targetTrackOrigin.x : (parseFloat(targetTrackOrigin.x) || 0);
+          originY = typeof targetTrackOrigin.y === 'number' ? targetTrackOrigin.y : (parseFloat(targetTrackOrigin.y) || 30);
         }
       }
 
       const finalTrack: TrackDef = {
         origin: { x: originX, y: originY },
-        startPitch: typeof targetTrack.startPitch === 'number' ? targetTrack.startPitch : (parseFloat(targetTrack.startPitch) || 0),
+        startPitch: typeof targetStartPitch === 'number' ? targetStartPitch : (parseFloat(targetStartPitch) || 0),
         pieces: sanitizedPieces,
       };
 
@@ -346,11 +449,11 @@ export default function ImportExportModal({
         track: finalTrack,
         settings: targetSettings,
         theme: targetTheme,
-        name: importedName,
+        name: importedName || parsed.name,
         isSettingsOnly: false,
       };
     } catch (err: any) {
-      setImportError(`JSON Syntax Error: ${err?.message || 'Invalid JSON'}`);
+      setImportError(`JSON Parse Error: ${err?.message || 'Invalid JSON syntax'}`);
       return null;
     }
   };
@@ -362,6 +465,7 @@ export default function ImportExportModal({
 
   const handleFileDrop = (e: React.DragEvent) => {
     e.preventDefault();
+    e.stopPropagation();
     setIsDragOver(false);
     const file = e.dataTransfer.files?.[0];
     if (file) {
@@ -374,9 +478,12 @@ export default function ImportExportModal({
     if (file) {
       readFile(file);
     }
+    // reset input value so re-selecting same file triggers onChange
+    e.target.value = '';
   };
 
   const readFile = (file: File) => {
+    setImportError(null);
     const reader = new FileReader();
     reader.onload = (event) => {
       const content = event.target?.result as string;
@@ -569,14 +676,14 @@ export default function ImportExportModal({
                 onClick={() => fileInputRef.current?.click()}
                 className={`flex cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed p-6 text-center transition ${
                   isDragOver
-                    ? 'border-blue-500 bg-blue-50/70'
-                    : 'border-slate-200 bg-slate-50/50 hover:border-slate-300 hover:bg-slate-50'
+                    ? 'border-blue-500 bg-blue-50/80 shadow-inner'
+                    : 'border-slate-200 bg-slate-50/60 hover:border-blue-400 hover:bg-slate-50'
                 }`}
               >
                 <input
                   ref={fileInputRef}
                   type="file"
-                  accept=".json,application/json"
+                  accept=".json,.txt,application/json,text/plain"
                   onChange={handleFileInput}
                   className="hidden"
                 />
@@ -585,20 +692,62 @@ export default function ImportExportModal({
                 </div>
                 <div className="mt-3 text-sm font-bold text-slate-800">Drop a coaster .json file here</div>
                 <p className="mt-1 text-xs text-slate-500">or click to browse from your computer</p>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    fileInputRef.current?.click();
+                  }}
+                  className="mt-3 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-xs hover:bg-slate-50"
+                >
+                  Browse Files...
+                </button>
               </div>
 
               {/* Paste Text Area */}
               <div>
-                <label className="block text-xs font-bold uppercase tracking-wider text-slate-600">
-                  Or Paste JSON Text
-                </label>
+                <div className="flex items-center justify-between">
+                  <label className="block text-xs font-bold uppercase tracking-wider text-slate-600">
+                    Or Paste JSON Text
+                  </label>
+                  {pasteText && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPasteText('');
+                        setImportError(null);
+                      }}
+                      className="text-[11px] font-semibold text-slate-400 hover:text-rose-600"
+                    >
+                      Clear
+                    </button>
+                  )}
+                </div>
                 <textarea
                   value={pasteText}
                   onChange={(e) => setPasteText(e.target.value)}
-                  placeholder='Paste valid Coaster Forge JSON or raw track object here...'
+                  placeholder='Paste valid Coaster Forge JSON, TrackDef object, or pieces array here...'
                   rows={5}
                   className="mt-1.5 w-full rounded-xl border border-slate-200 bg-slate-50 p-3 font-mono text-xs text-slate-800 shadow-sm outline-none focus:border-blue-500 focus:bg-white focus:ring-2 focus:ring-blue-100"
                 />
+              </div>
+
+              {/* Quick Preset Samples to test instantly */}
+              <div className="flex flex-wrap items-center gap-2 pt-1 text-xs">
+                <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Sample JSONs:</span>
+                {SAMPLE_COASTERS.map((sample) => (
+                  <button
+                    key={sample.name}
+                    type="button"
+                    onClick={() => {
+                      setPasteText(sample.json);
+                      setImportError(null);
+                    }}
+                    className="rounded-lg border border-slate-200 bg-slate-100 px-2.5 py-1 text-[11px] font-medium text-slate-700 hover:border-blue-300 hover:bg-blue-50 hover:text-blue-700 transition"
+                  >
+                    + {sample.name}
+                  </button>
+                ))}
               </div>
 
               {/* Status / Preview */}
@@ -616,12 +765,12 @@ export default function ImportExportModal({
                       <Sparkles className="h-4 w-4 text-emerald-600" />
                       <span className="font-bold text-emerald-900">
                         {currentParsed.isSettingsOnly
-                          ? `Valid Physics Settings: ${currentParsed.name || 'Custom Physics'}`
-                          : `Valid Track: ${currentParsed.name || 'Imported Coaster'}`}
+                          ? `Ready to Apply: ${currentParsed.name || 'Custom Physics'}`
+                          : `Ready to Load: ${currentParsed.name || 'Custom Coaster'}`}
                       </span>
                     </div>
                     {!currentParsed.isSettingsOnly && (
-                      <span className="font-mono font-semibold text-emerald-800">
+                      <span className="rounded-md bg-emerald-100 px-2 py-0.5 font-mono text-xs font-bold text-emerald-800">
                         {currentParsed.track.pieces.length} pieces
                       </span>
                     )}
@@ -672,11 +821,15 @@ export default function ImportExportModal({
           ) : (
             <button
               onClick={executeImport}
-              disabled={!pasteText.trim() || !!importError}
-              className="flex items-center gap-1.5 rounded-xl bg-blue-600 px-5 py-2 text-xs font-bold text-white shadow-md shadow-blue-200 hover:bg-blue-500 disabled:opacity-40"
+              disabled={!pasteText.trim() || !!importError || !currentParsed}
+              className="flex items-center gap-1.5 rounded-xl bg-blue-600 px-5 py-2 text-xs font-bold text-white shadow-md shadow-blue-200 hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed"
             >
               <Upload className="h-4 w-4" />
-              {currentParsed?.isSettingsOnly ? 'Apply Settings' : 'Load Coaster'}
+              {currentParsed?.isSettingsOnly
+                ? 'Apply Physics Settings'
+                : currentParsed
+                  ? `Load Coaster (${currentParsed.track.pieces.length} pieces)`
+                  : 'Load Coaster'}
             </button>
           )}
         </div>

@@ -124,6 +124,7 @@ export default function App() {
   hoveredPieceRef.current = hoveredPiece;
   const [importExportOpen, setImportExportOpen] = useState(false);
   const [importExportMode, setImportExportMode] = useState<'export' | 'import'>('export');
+  const [initialImportText, setInitialImportText] = useState<string>('');
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
   // Custom Procedural Support Structure Configuration
@@ -507,10 +508,18 @@ export default function App() {
     };
     const onDrop = (e: DragEvent) => {
       const file = e.dataTransfer?.files?.[0];
-      if (file && (file.name.endsWith('.json') || file.type.includes('json'))) {
+      if (file && (file.name.endsWith('.json') || file.type.includes('json') || file.type.includes('text') || file.name.endsWith('.txt'))) {
         e.preventDefault();
-        setImportExportMode('import');
-        setImportExportOpen(true);
+        const reader = new FileReader();
+        reader.onload = (ev) => {
+          const content = ev.target?.result as string;
+          if (content) {
+            setInitialImportText(content);
+            setImportExportMode('import');
+            setImportExportOpen(true);
+          }
+        };
+        reader.readAsText(file);
       }
     };
     window.addEventListener('dragover', onDragOver);
@@ -645,6 +654,7 @@ export default function App() {
           <div className="flex items-center gap-0.5 sm:gap-1 rounded-xl border border-slate-200 bg-white p-0.5 shadow-xs">
             <button
               onClick={() => {
+                setInitialImportText('');
                 setImportExportMode('import');
                 setImportExportOpen(true);
               }}
@@ -1250,6 +1260,7 @@ export default function App() {
       <ImportExportModal
         isOpen={importExportOpen}
         initialMode={importExportMode}
+        initialImportText={initialImportText}
         onClose={() => setImportExportOpen(false)}
         track={track}
         settings={settings}
