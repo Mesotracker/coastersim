@@ -34,6 +34,8 @@ export interface Piece {
   power: number;
   /** extra pitch offset in degrees (-75 … 75) */
   rot: number;
+  /** specific custom boost intensity multiplier (0.2x – 4.0x) */
+  boostIntensity?: number;
 }
 
 export interface TrackDef {
@@ -270,6 +272,7 @@ export interface BuiltTrack {
   nor: Float32Array;
   center3: { x: number; z: number };
   radius3: number;
+  pieces?: Piece[];
 }
 
 const DEG = Math.PI / 180;
@@ -491,6 +494,7 @@ export function buildTrack(track: TrackDef): BuiltTrack {
     nor,
     center3: { x: cx, z: cz },
     radius3,
+    pieces: track.pieces,
   };
 }
 
@@ -503,6 +507,7 @@ export interface Frame {
   yawRate: number;
   bank: number;
   special: Special;
+  piece: number;
   px: number;
   py: number;
   pz: number;
@@ -515,7 +520,7 @@ export interface Frame {
 }
 
 const scratch: Frame = {
-  s: 0, x: 0, y: 0, pitch: 0, kappa: 0, yawRate: 0, bank: 0, special: 0,
+  s: 0, x: 0, y: 0, pitch: 0, kappa: 0, yawRate: 0, bank: 0, special: 0, piece: 0,
   px: 0, py: 0, pz: 0, tx: 1, ty: 0, tz: 0, nx: 0, ny: 1, nz: 0,
 };
 
@@ -558,6 +563,7 @@ export function frameAt(track: BuiltTrack, s: number, out: Frame = scratch): Fra
   out.yawRate = a.yawRate + (b.yawRate - a.yawRate) * t;
   out.bank = a.bank + (b.bank - a.bank) * t;
   out.special = t < 0.5 ? a.special : b.special;
+  out.piece = t < 0.5 ? a.piece : b.piece;
   out.px = a.px + (b.px - a.px) * t;
   out.py = a.py + (b.py - a.py) * t;
   out.pz = a.pz + (b.pz - a.pz) * t;

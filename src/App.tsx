@@ -134,6 +134,10 @@ export default function App() {
     crossBracing: true,
   });
 
+  // Visualization & safety vision effect toggles
+  const [gForceHeatMap, setGForceHeatMap] = useState<boolean>(false);
+  const [dangerVisionEffects, setDangerVisionEffects] = useState<boolean>(true);
+
   // Initialize Web Audio synthesizer on first user interaction
   useEffect(() => {
     const handleFirstInteraction = () => {
@@ -1235,6 +1239,8 @@ export default function App() {
               weather={weather}
               aerialFollow={aerialFollow}
               supportConfig={supportConfig}
+              gForceHeatMap={gForceHeatMap}
+              telemetry={precomputedRide.telemetry}
             />
             <HUD
               hud={hud}
@@ -1251,6 +1257,15 @@ export default function App() {
               simSpeed={simSpeed}
               setSimSpeed={setSimSpeed}
               trackLengthFt={lengthFt}
+              gForceHeatMap={gForceHeatMap}
+              setGForceHeatMap={setGForceHeatMap}
+              dangerVisionEffects={dangerVisionEffects}
+              setDangerVisionEffects={setDangerVisionEffects}
+              feasibility={precomputedRide.feasibility}
+              onSelectPiece={(idx) => {
+                setSelected(idx);
+                setTab('piece');
+              }}
             />
           </section>
         </div>

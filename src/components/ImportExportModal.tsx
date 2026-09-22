@@ -382,7 +382,18 @@ export default function ImportExportModal({
           (typeof parsed.friction === 'number' && typeof parsed.gravity === 'number');
 
         if (isPhysicsSettings) {
-          const physSettings: SimSettings = parsed.settings || parsed;
+          const rawPhys = parsed.settings || parsed;
+          const physSettings: SimSettings = {
+            friction: typeof rawPhys.friction === 'number' ? rawPhys.friction : (parseFloat(rawPhys.friction) || settings.friction),
+            drag: typeof rawPhys.drag === 'number' ? rawPhys.drag : (parseFloat(rawPhys.drag) || settings.drag),
+            gravity: typeof rawPhys.gravity === 'number' ? rawPhys.gravity : (parseFloat(rawPhys.gravity) || settings.gravity),
+            liftSpeed: typeof rawPhys.liftSpeed === 'number' ? rawPhys.liftSpeed : (parseFloat(rawPhys.liftSpeed) || settings.liftSpeed),
+            launch: typeof rawPhys.launch === 'number' ? rawPhys.launch : (parseFloat(rawPhys.launch) || settings.launch),
+            brakeForce: typeof rawPhys.brakeForce === 'number' ? rawPhys.brakeForce : (parseFloat(rawPhys.brakeForce) || settings.brakeForce),
+            boostForce: typeof rawPhys.boostForce === 'number' ? rawPhys.boostForce : (parseFloat(rawPhys.boostForce) || settings.boostForce),
+            gForceBuffer: typeof (rawPhys.gForceBuffer ?? rawPhys.gBuffer) === 'number' ? (rawPhys.gForceBuffer ?? rawPhys.gBuffer) : (parseFloat(rawPhys.gForceBuffer ?? rawPhys.gBuffer) || settings.gForceBuffer),
+            material: ['metal', 'wood', 'plastic'].includes(rawPhys.material) ? rawPhys.material : settings.material,
+          };
           return {
             track,
             settings: physSettings,
@@ -396,7 +407,7 @@ export default function ImportExportModal({
         return null;
       }
 
-      // Step 3: Sanitize and normalize all pieces
+      // Step 3: Sanitize and normalize all pieces (including boostIntensity)
       const sanitizedPieces: Piece[] = rawPieces.map((p: any, idx: number) => {
         if (typeof p === 'string') {
           return {
@@ -413,12 +424,18 @@ export default function ImportExportModal({
         const powerVal = typeof p?.power === 'number' ? p.power : parseFloat(p?.power ?? p?.pitch ?? p?.intensity);
         const rotVal = typeof p?.rot === 'number' ? p.rot : parseFloat(p?.rot ?? p?.rotation ?? p?.yaw ?? p?.angle);
 
+        // Parse piece-specific boost intensity
+        const rawBoost = p?.boostIntensity ?? p?.boost_intensity ?? (kind === 'boost' ? (p?.intensity ?? p?.power) : undefined);
+        const boostVal = typeof rawBoost === 'number' ? rawBoost : parseFloat(rawBoost);
+        const boostIntensity = !isNaN(boostVal) && boostVal > 0 ? Math.min(3.0, Math.max(0.2, boostVal)) : undefined;
+
         return {
           id: p?.id ? String(p.id) : `imp_${idx}_${Math.random().toString(36).slice(2, 6)}`,
           kind,
           len: !isNaN(lenVal) && lenVal > 0.1 ? Math.min(3, Math.max(0.2, lenVal)) : 1,
           power: !isNaN(powerVal) && powerVal > 0.1 ? Math.min(2.5, Math.max(0.1, powerVal)) : 1,
           rot: !isNaN(rotVal) ? Math.max(-90, Math.min(90, rotVal)) : 0,
+          ...(boostIntensity !== undefined ? { boostIntensity } : {}),
         };
       });
 
@@ -439,6 +456,27 @@ export default function ImportExportModal({
         }
       }
 
+      // Extract and sanitize gravity, friction, and full physics configuration
+      let finalSettings: SimSettings | undefined = undefined;
+      const rawSettingsSource = targetSettings || parsed.settings || parsed.physics || (typeof parsed.friction === 'number' || typeof parsed.gravity === 'number' ? parsed : undefined);
+      if (rawSettingsSource && typeof rawSettingsSource === 'object') {
+        const parseNum = (v: any, fallback: number) => {
+          const n = typeof v === 'number' ? v : parseFloat(v);
+          return !isNaN(n) ? n : fallback;
+        };
+        finalSettings = {
+          friction: parseNum(rawSettingsSource.friction, settings.friction),
+          drag: parseNum(rawSettingsSource.drag, settings.drag),
+          gravity: parseNum(rawSettingsSource.gravity, settings.gravity),
+          liftSpeed: parseNum(rawSettingsSource.liftSpeed, settings.liftSpeed),
+          launch: parseNum(rawSettingsSource.launch, settings.launch),
+          brakeForce: parseNum(rawSettingsSource.brakeForce, settings.brakeForce),
+          boostForce: parseNum(rawSettingsSource.boostForce, settings.boostForce),
+          gForceBuffer: parseNum(rawSettingsSource.gForceBuffer ?? rawSettingsSource.gBuffer, settings.gForceBuffer ?? 0.25),
+          material: ['metal', 'wood', 'plastic'].includes(rawSettingsSource.material) ? rawSettingsSource.material : settings.material,
+        };
+      }
+
       const finalTrack: TrackDef = {
         origin: { x: originX, y: originY },
         startPitch: typeof targetStartPitch === 'number' ? targetStartPitch : (parseFloat(targetStartPitch) || 0),
@@ -447,7 +485,7 @@ export default function ImportExportModal({
 
       return {
         track: finalTrack,
-        settings: targetSettings,
+        settings: finalSettings,
         theme: targetTheme,
         name: importedName || parsed.name,
         isSettingsOnly: false,

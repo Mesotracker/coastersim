@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { BuiltTrack, Frame, frameAt, makeFrame } from '../lib/track';
-import { CoasterMaterial, SimState } from '../lib/physics';
+import { CoasterMaterial, SimState, TelemetryPoint } from '../lib/physics';
 import { Theme } from '../lib/themes';
 
 export type CamMode = 'pov' | 'chase' | 'orbit';
@@ -26,6 +26,35 @@ interface Props {
   weather?: WeatherType;
   aerialFollow?: boolean;
   supportConfig?: SupportConfig;
+  gForceHeatMap?: boolean;
+  telemetry?: TelemetryPoint[];
+}
+
+function getGColor(g: number, outColor: THREE.Color): THREE.Color {
+  if (g < 0.2) {
+    // Airtime: cyan/sky blue
+    return outColor.setRGB(0.1, 0.8, 1.0);
+  } else if (g < 1.0) {
+    // Low G: cyan-emerald
+    const t = (g - 0.2) / 0.8;
+    return outColor.setRGB(0.1 + 0.15 * t, 0.8 + 0.12 * t, 1.0 - 0.65 * t);
+  } else if (g < 2.2) {
+    // Nominal / Comfortable: vibrant emerald green
+    const t = (g - 1.0) / 1.2;
+    return outColor.setRGB(0.25 + 0.65 * t, 0.92, 0.35 - 0.25 * t);
+  } else if (g < 3.5) {
+    // Moderate: bright amber / yellow
+    const t = (g - 2.2) / 1.3;
+    return outColor.setRGB(0.95 + 0.05 * t, 0.92 - 0.38 * t, 0.1);
+  } else if (g < 4.8) {
+    // High G: vivid orange
+    const t = (g - 3.5) / 1.3;
+    return outColor.setRGB(1.0, 0.54 - 0.34 * t, 0.1);
+  } else {
+    // Extreme / Danger: crimson red
+    const t = Math.min(1, (g - 4.8) / 3.0);
+    return outColor.setRGB(1.0, 0.2 - 0.16 * t, 0.2 + 0.2 * t);
+  }
 }
 
 class PointsCurve extends THREE.Curve<THREE.Vector3> {
@@ -105,6 +134,8 @@ export default function Ride3D({
   weather = 'day',
   aerialFollow = true,
   supportConfig,
+  gForceHeatMap = false,
+  telemetry,
 }: Props) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const stateRef = useRef<{
@@ -907,6 +938,43 @@ export default function Ride3D({
         metalness: 0.80,
       });
 
+      // If G-Force Heat Map is toggled ON, use vertex-colored materials
+      if (gForceHeatMap) {
+        railMat = new THREE.MeshStandardMaterial({
+          roughness: 0.22,
+          metalness: 0.75,
+          vertexColors: true,
+        });
+        spineMat = new THREE.MeshStandardMaterial({
+          roughness: 0.32,
+          metalness: 0.65,
+          vertexColors: true,
+        });
+      }
+
+      // Sample G-force estimation along track
+      const sampleG = (sampleIdx: number): number => {
+        const sm = S[sampleIdx];
+        if (!sm) return 1.0;
+        if (telemetry && telemetry.length > 0) {
+          let low = 0, high = telemetry.length - 1;
+          while (low <= high) {
+            const mid = (low + high) >> 1;
+            if (telemetry[mid].s < sm.s) low = mid + 1;
+            else high = mid - 1;
+          }
+          const idx = Math.min(telemetry.length - 1, Math.max(0, low));
+          return telemetry[idx].g;
+        }
+        const hDrop = Math.max(0, built.maxHeight - sm.y);
+        const vEst = Math.sqrt(2 * 9.81 * 0.44 * hDrop + 16);
+        const kappaM = sm.kappa / 0.44;
+        const yawRateM = sm.yawRate / 0.44;
+        const aNormVert = 9.81 * Math.cos(sm.pitch) + vEst * vEst * kappaM;
+        const aNormLat = vEst * vEst * yawRateM;
+        return Math.sqrt(aNormVert * aNormVert + aNormLat * aNormLat) / 9.81;
+      };
+
       // Build continuous rail tubes with gaps over mid-air jump leaps
       const buildRailTubes = (pts: THREE.Vector3[], radius: number, mat: THREE.Material) => {
         const segs: THREE.Vector3[][] = [];
@@ -928,6 +996,44 @@ export default function Ride3D({
         for (const ptsList of segs) {
           const tubeSegments = Math.max(6, Math.min(1200, ptsList.length));
           const geo = new THREE.TubeGeometry(new PointsCurve(ptsList), tubeSegments, radius, 8, false);
+
+          if (gForceHeatMap) {
+            const count = geo.attributes.position.count;
+            const colors = new Float32Array(count * 3);
+            const tempCol = new THREE.Color();
+            const radSegs = 8;
+            const rings = tubeSegments + 1;
+            for (let r = 0; r < rings; r++) {
+              const frac = r / tubeSegments;
+              const pt = ptsList[Math.min(ptsList.length - 1, Math.floor(frac * ptsList.length))];
+              // Find closest sample in track
+              let bestIdx = Math.min(n - 1, Math.max(0, Math.floor(frac * n)));
+              let bestDistSq = 1e9;
+              const searchRange = 12;
+              const startK = Math.max(0, bestIdx - searchRange);
+              const endK = Math.min(n - 1, bestIdx + searchRange);
+              for (let k = startK; k <= endK; k++) {
+                const dx = S[k].px - pt.x;
+                const dy = S[k].py - pt.y;
+                const dz = S[k].pz - pt.z;
+                const dsq = dx * dx + dy * dy + dz * dz;
+                if (dsq < bestDistSq) {
+                  bestDistSq = dsq;
+                  bestIdx = k;
+                }
+              }
+              const gVal = sampleG(bestIdx);
+              getGColor(gVal, tempCol);
+              for (let c = 0; c <= radSegs; c++) {
+                const vIdx = (r * (radSegs + 1) + c) * 3;
+                colors[vIdx] = tempCol.r;
+                colors[vIdx + 1] = tempCol.g;
+                colors[vIdx + 2] = tempCol.b;
+              }
+            }
+            geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+          }
+
           const mesh = new THREE.Mesh(geo, mat);
           mesh.castShadow = true;
           st.trackGroup.add(mesh);
@@ -1480,7 +1586,7 @@ export default function Ride3D({
       cam.updateProjectionMatrix();
     }, 70);
     return () => window.clearTimeout(timer);
-  }, [built, theme, material, supportConfig]);
+  }, [built, theme, material, supportConfig, gForceHeatMap, telemetry]);
 
   // ------------------------------------------------------------- frame loop
   useEffect(() => {

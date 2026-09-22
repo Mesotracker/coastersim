@@ -21,7 +21,7 @@ import {
 } from 'lucide-react';
 import { CamMode, WeatherType } from './Ride3D';
 import SpeedGraph from './SpeedGraph';
-import { TelemetryPoint } from '../lib/physics';
+import { TelemetryPoint, TrackFeasibility } from '../lib/physics';
 import { audioEngine } from '../lib/audio';
 import { analyzeRideIntensity, IntensityReport, INTENSITY_CONFIG } from '../lib/intensity';
 
@@ -81,6 +81,12 @@ interface HUDProps {
   simSpeed?: number;
   setSimSpeed?: (speed: number) => void;
   trackLengthFt?: number;
+  gForceHeatMap?: boolean;
+  setGForceHeatMap?: (v: boolean | ((prev: boolean) => boolean)) => void;
+  dangerVisionEffects?: boolean;
+  setDangerVisionEffects?: (v: boolean | ((prev: boolean) => boolean)) => void;
+  feasibility?: TrackFeasibility;
+  onSelectPiece?: (index: number) => void;
 }
 
 export default function HUD({
@@ -98,6 +104,12 @@ export default function HUD({
   simSpeed = 1,
   setSimSpeed,
   trackLengthFt = 1200,
+  gForceHeatMap = false,
+  setGForceHeatMap,
+  dangerVisionEffects = true,
+  setDangerVisionEffects,
+  feasibility,
+  onSelectPiece,
 }: HUDProps) {
   const [showGraph, setShowGraph] = useState(false);
   const trackBarRef = useRef<HTMLDivElement>(null);
@@ -172,33 +184,35 @@ export default function HUD({
 
   const cfg = INTENSITY_CONFIG[intensityReport.level];
 
-  // Physiological Cockpit Overlay Effects (POV mode only)
+  // Physiological Cockpit Overlay Effects (POV mode only, toggleable via dangerVisionEffects)
   // Positive G: Blackout / greyout tunnel vision starting above 5.0G, total G-LOC at 8.0G+
   const blackoutIntensity =
-    camMode === 'pov' && hud.g > 4.8
+    dangerVisionEffects && camMode === 'pov' && hud.g > 4.8
       ? Math.max(0, Math.min(0.96, (hud.g - 4.8) / 3.4))
       : 0;
 
   // Negative G: Redout vascular flush starting at -1.2G, severe hemorrhage vascular wash at -2.8G
   const redoutIntensity =
-    camMode === 'pov' && hud.g < -1.0
+    dangerVisionEffects && camMode === 'pov' && hud.g < -1.0
       ? Math.max(0, Math.min(0.92, (-hud.g - 1.0) / 1.8))
       : 0;
 
   // Real-time active force danger banner
   let activeHazardBanner: { text: string; fatal: boolean } | null = null;
-  if (hud.g >= 9.0) {
-    activeHazardBanner = { text: `☠️ CRITICAL: +${hud.g.toFixed(1)}G LETHAL SPINAL BURST & CARDIAC ARREST`, fatal: true };
-  } else if (hud.g >= 6.2) {
-    activeHazardBanner = { text: `⚠️ DANGER: +${hud.g.toFixed(1)}G RETINAL ISCHEMIA & G-LOC BLACKOUT`, fatal: false };
-  } else if (hud.g <= -3.2) {
-    activeHazardBanner = { text: `☠️ CRITICAL: ${hud.g.toFixed(1)}G INTRACRANIAL HEMORRHAGE & FATAL STROKE`, fatal: true };
-  } else if (hud.g <= -2.0) {
-    activeHazardBanner = { text: `⚠️ DANGER: ${hud.g.toFixed(1)}G CEPHALIC REDOUT & OCULAR PRESSURE`, fatal: false };
-  } else if (Math.abs(hud.lat) >= 4.0) {
-    activeHazardBanner = { text: `☠️ CRITICAL: ${Math.abs(hud.lat).toFixed(1)}G INTERNAL DECAPITATION SEVERANCE`, fatal: true };
-  } else if (Math.abs(hud.lat) >= 2.6) {
-    activeHazardBanner = { text: `⚠️ DANGER: ${Math.abs(hud.lat).toFixed(1)}G SEVERE CERVICAL WHIPLASH`, fatal: false };
+  if (dangerVisionEffects) {
+    if (hud.g >= 9.0) {
+      activeHazardBanner = { text: `☠️ CRITICAL: +${hud.g.toFixed(1)}G LETHAL SPINAL BURST & CARDIAC ARREST`, fatal: true };
+    } else if (hud.g >= 6.2) {
+      activeHazardBanner = { text: `⚠️ DANGER: +${hud.g.toFixed(1)}G RETINAL ISCHEMIA & G-LOC BLACKOUT`, fatal: false };
+    } else if (hud.g <= -3.2) {
+      activeHazardBanner = { text: `☠️ CRITICAL: ${hud.g.toFixed(1)}G INTRACRANIAL HEMORRHAGE & FATAL STROKE`, fatal: true };
+    } else if (hud.g <= -2.0) {
+      activeHazardBanner = { text: `⚠️ DANGER: ${hud.g.toFixed(1)}G CEPHALIC REDOUT & OCULAR PRESSURE`, fatal: false };
+    } else if (Math.abs(hud.lat) >= 4.0) {
+      activeHazardBanner = { text: `☠️ CRITICAL: ${Math.abs(hud.lat).toFixed(1)}G INTERNAL DECAPITATION SEVERANCE`, fatal: true };
+    } else if (Math.abs(hud.lat) >= 2.6) {
+      activeHazardBanner = { text: `⚠️ DANGER: ${Math.abs(hud.lat).toFixed(1)}G SEVERE CERVICAL WHIPLASH`, fatal: false };
+    }
   }
 
   return (
@@ -385,6 +399,34 @@ export default function HUD({
             <span>Graph</span>
           </button>
 
+          {/* G-Force Track Heat Map Switch */}
+          <button
+            onClick={() => setGForceHeatMap?.((v) => !v)}
+            title={gForceHeatMap ? 'G-Force 3D Track Heat Map: ON (Click to turn off)' : 'G-Force 3D Track Heat Map: OFF (Click to turn on)'}
+            className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[11px] font-bold backdrop-blur-sm ring-1 transition ${
+              gForceHeatMap
+                ? 'bg-gradient-to-r from-cyan-600 via-amber-500 to-rose-600 text-white ring-amber-300 shadow-md shadow-amber-500/30'
+                : 'bg-black/50 text-white/80 ring-white/15 hover:bg-black/70 hover:text-white'
+            }`}
+          >
+            <Activity className="h-3.5 w-3.5" />
+            <span>{gForceHeatMap ? 'Heatmap ON' : 'Heatmap'}</span>
+          </button>
+
+          {/* Danger Vision Effects (Redouts / Blackouts / Hazard warnings) Switch */}
+          <button
+            onClick={() => setDangerVisionEffects?.((v) => !v)}
+            title={dangerVisionEffects ? 'Danger Vision FX (Redouts/Blackouts): ON (Click to disable)' : 'Danger Vision FX: DISABLED (Click to enable)'}
+            className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[11px] font-bold backdrop-blur-sm ring-1 transition ${
+              dangerVisionEffects
+                ? 'bg-rose-950/80 text-rose-200 ring-rose-500/50 hover:bg-rose-900/90'
+                : 'bg-black/50 text-white/40 ring-white/15 hover:text-white/80'
+            }`}
+          >
+            <HeartPulse className="h-3.5 w-3.5" />
+            <span className="hidden sm:inline">{dangerVisionEffects ? 'Vision FX ON' : 'Vision FX Off'}</span>
+          </button>
+
           <div className="flex gap-0.5 rounded-lg bg-black/55 p-1 backdrop-blur-md ring-1 ring-white/15">
             {MODES.map((m) => (
               <button
@@ -523,7 +565,7 @@ export default function HUD({
       {/* ================================================================ */}
       {/* REPLAY TIMELINE & DRAGGABLE PROGRESS BAR (Touch & Mouse Support)   */}
       {/* ================================================================ */}
-      <div className="pointer-events-auto absolute bottom-2.5 sm:bottom-3 left-2 sm:left-3 right-2 sm:right-3 z-20">
+      <div className={`pointer-events-auto absolute left-2 sm:left-3 right-2 sm:right-3 z-20 transition-all ${feasibility ? 'bottom-8 sm:bottom-9' : 'bottom-2.5 sm:bottom-3'}`}>
         <div className="rounded-2xl border border-white/20 bg-slate-950/85 p-2.5 sm:p-3 text-white shadow-2xl backdrop-blur-md ring-1 ring-black/40">
           {/* Top Row: Replay controls, time status, and telemetry snapshot */}
           <div className="mb-2 flex items-center justify-between gap-2 flex-wrap sm:flex-nowrap">
@@ -863,6 +905,68 @@ export default function HUD({
                 Close Inspector
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ================================================================ */}
+      {/* NARROW ERROR CHECKER BAR AT BOTTOM OF DISPLAY                   */}
+      {/* Green if working, Yellow on severe slowdown, Red on rollback/stall*/}
+      {/* ================================================================ */}
+      {feasibility && (
+        <div
+          id="feasibility-error-bar"
+          className={`pointer-events-auto absolute bottom-0 left-0 right-0 z-30 flex h-6 sm:h-7 items-center justify-between px-3 text-[10px] sm:text-xs font-semibold backdrop-blur-md border-t transition-colors duration-300 select-none ${
+            feasibility.status === 'ok'
+              ? 'bg-emerald-950/90 border-emerald-500/40 text-emerald-200'
+              : feasibility.status === 'warning'
+                ? 'bg-amber-950/95 border-amber-500/50 text-amber-100'
+                : 'bg-rose-950/95 border-rose-500/70 text-rose-100'
+          }`}
+        >
+          <div className="flex items-center gap-2 overflow-hidden text-ellipsis whitespace-nowrap min-w-0">
+            {/* Status indicator badge */}
+            <span
+              className={`flex items-center gap-1 shrink-0 rounded-full px-1.5 py-0.5 text-[9px] sm:text-[10px] font-black uppercase tracking-wider ${
+                feasibility.status === 'ok'
+                  ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                  : feasibility.status === 'warning'
+                    ? 'bg-amber-500/25 text-amber-200 border border-amber-500/50'
+                    : 'bg-rose-500/30 text-rose-200 border border-rose-500/60 animate-pulse'
+              }`}
+            >
+              <span
+                className={`h-1.5 w-1.5 rounded-full ${
+                  feasibility.status === 'ok'
+                    ? 'bg-emerald-400'
+                    : feasibility.status === 'warning'
+                      ? 'bg-amber-400 animate-pulse'
+                      : 'bg-rose-400 animate-ping'
+                }`}
+              />
+              {feasibility.status === 'ok' ? 'Nominal' : feasibility.status === 'warning' ? 'Slowdown' : 'Rollback Failure'}
+            </span>
+
+            <span className="truncate">{feasibility.message}</span>
+          </div>
+
+          <div className="flex items-center gap-2 shrink-0 ml-2">
+            {feasibility.problemPieceIndex != null && onSelectPiece && (
+              <button
+                onClick={() => onSelectPiece(feasibility.problemPieceIndex!)}
+                title={`Inspect problematic track piece #${feasibility.problemPieceIndex + 1}`}
+                className={`rounded px-1.5 py-0.5 text-[9px] sm:text-[10px] font-bold underline transition hover:opacity-100 ${
+                  feasibility.status === 'error'
+                    ? 'text-rose-100 bg-rose-500/40 hover:bg-rose-500/60'
+                    : 'text-amber-100 bg-amber-500/40 hover:bg-amber-500/60'
+                }`}
+              >
+                Jump to #{feasibility.problemPieceIndex + 1}
+              </button>
+            )}
+            <span className="font-mono text-[10px] opacity-80 hidden xs:inline">
+              Min: {feasibility.minSpeedMph.toFixed(1)} mph
+            </span>
           </div>
         </div>
       )}

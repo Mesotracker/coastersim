@@ -167,25 +167,84 @@ export default function Inspector({
           suffix="×"
           onChange={(v) => onUpdate(index, { len: v })}
         />
-        <Slider
-          label={
-            piece.kind === 'curveL' || piece.kind === 'curveR'
-              ? 'Turn Radius'
-              : piece.kind === 'loop'
-                ? 'Loop Scale'
-                : piece.kind === 'zeroGRoll'
-                  ? 'Roll Scale'
-                  : piece.kind === 'corkscrew' || piece.kind === 'immelmann'
-                    ? 'Element Scale'
-                    : 'Steepness'
-          }
-          value={piece.power}
-          min={0.2}
-          max={1.8}
-          step={0.05}
-          suffix="×"
-          onChange={(v) => onUpdate(index, { power: v })}
-        />
+
+        {piece.kind === 'boost' ? (
+          <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 p-3 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold text-amber-700 dark:text-amber-400 flex items-center gap-1.5">
+                <span>🚀</span> Boost Launch Intensity
+              </span>
+              <span className="font-mono text-xs font-black text-amber-600 bg-amber-500/10 px-2 py-0.5 rounded-md">
+                {(piece.boostIntensity ?? piece.power ?? 1).toFixed(1)}×
+              </span>
+            </div>
+
+            <Slider
+              label="Booster Thrust"
+              value={piece.boostIntensity ?? piece.power ?? 1}
+              min={0.2}
+              max={4.0}
+              step={0.1}
+              suffix="×"
+              onChange={(v) => onUpdate(index, { boostIntensity: v, power: v })}
+            />
+
+            {/* Intensity classification */}
+            <div className="text-[10px] text-amber-700/80 dark:text-amber-300/80 font-medium">
+              {(piece.boostIntensity ?? piece.power ?? 1) <= 0.7
+                ? '🟢 Low Kick (Gentle speed maintainer / trim)'
+                : (piece.boostIntensity ?? piece.power ?? 1) <= 1.4
+                  ? '🟡 Standard LSM (Classic launch coaster)'
+                  : (piece.boostIntensity ?? piece.power ?? 1) <= 2.5
+                    ? '🟠 Hydraulic Catapult (High-speed surge)'
+                    : '🔴 Hyper Launch (Extreme rocket acceleration)'}
+            </div>
+
+            {/* Quick Presets */}
+            <div className="grid grid-cols-4 gap-1 pt-1">
+              {[
+                { label: '0.5× Trim', val: 0.5 },
+                { label: '1.0× LSM', val: 1.0 },
+                { label: '2.0× Rocket', val: 2.0 },
+                { label: '3.5× Hyper', val: 3.5 },
+              ].map((pst) => (
+                <button
+                  key={pst.val}
+                  type="button"
+                  onClick={() => onUpdate(index, { boostIntensity: pst.val, power: pst.val })}
+                  className={`rounded-md px-1.5 py-1 text-[9px] font-bold transition ${
+                    Math.abs((piece.boostIntensity ?? piece.power ?? 1) - pst.val) < 0.05
+                      ? 'bg-amber-500 text-white shadow-xs'
+                      : 'bg-white/80 dark:bg-slate-800 text-slate-700 dark:text-slate-200 border border-amber-500/20 hover:bg-amber-50'
+                  }`}
+                >
+                  {pst.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : (
+          <Slider
+            label={
+              piece.kind === 'curveL' || piece.kind === 'curveR'
+                ? 'Turn Radius'
+                : piece.kind === 'loop'
+                  ? 'Loop Scale'
+                  : piece.kind === 'zeroGRoll'
+                    ? 'Roll Scale'
+                    : piece.kind === 'corkscrew' || piece.kind === 'immelmann'
+                      ? 'Element Scale'
+                      : 'Steepness'
+            }
+            value={piece.power}
+            min={0.2}
+            max={1.8}
+            step={0.05}
+            suffix="×"
+            onChange={(v) => onUpdate(index, { power: v })}
+          />
+        )}
+
         <Slider
           label="Lateral Rotation"
           value={piece.rot}

@@ -102,6 +102,15 @@ export function resetSim(st: SimState) {
   st.lastTelemetryT = 0;
 }
 
+export interface TrackFeasibility {
+  status: 'ok' | 'warning' | 'error';
+  message: string;
+  problemPieceIndex: number | null;
+  minSpeedMph: number;
+  minSpeedPieceIndex: number | null;
+  isRollback: boolean;
+}
+
 const f: Frame = makeFrame();
 
 /**
@@ -119,6 +128,7 @@ export function precomputeFullRideTelemetry(
   totalDuration: number;
   airtime: number;
   stalled: boolean;
+  feasibility: TrackFeasibility;
 } {
   if (!track || track.length < 8) {
     return {
@@ -129,6 +139,14 @@ export function precomputeFullRideTelemetry(
       totalDuration: 0,
       airtime: 0,
       stalled: false,
+      feasibility: {
+        status: 'ok',
+        message: 'Ready to analyze track feasibility',
+        problemPieceIndex: null,
+        minSpeedMph: 0,
+        minSpeedPieceIndex: null,
+        isRollback: false,
+      },
     };
   }
 
@@ -191,8 +209,11 @@ export function precomputeFullRideTelemetry(
       // Trim brakes
       if (velV > 5.5) accel -= cfg.brakeForce;
     } else if (tempF.special === 2 && velV > -0.5) {
-      // Boost
-      accel += cfg.boostForce;
+      // Boost: scaled by piece-specific boost intensity or power
+      const pIdx = tempF.piece;
+      const pDef = track.pieces ? track.pieces[pIdx] : undefined;
+      const intensity = pDef?.boostIntensity ?? (pDef?.kind === 'boost' ? pDef.power : 1.0);
+      accel += cfg.boostForce * intensity;
     }
 
     if (posS < STATION_LEN * 0.75 && velV < cfg.launch) {
@@ -205,6 +226,11 @@ export function precomputeFullRideTelemetry(
 
     return accel;
   };
+
+  let minSpeedAfterLift = Infinity;
+  let minSpeedPieceIdx: number | null = null;
+  let rollbackDetected = false;
+  let rollbackPieceIdx: number | null = null;
 
   while (s < track.length && step < maxSimSteps) {
     step++;
@@ -229,6 +255,10 @@ export function precomputeFullRideTelemetry(
       s = 0;
       if (v < -0.5) {
         stalled = true;
+        if (!rollbackDetected) {
+          rollbackDetected = true;
+          rollbackPieceIdx = tempF.piece;
+        }
         break;
       }
       v = Math.max(v, 0.8);
@@ -238,6 +268,10 @@ export function precomputeFullRideTelemetry(
       stallTimer += dt;
       if (stallTimer > 2.0) {
         stalled = true;
+        if (!rollbackDetected) {
+          rollbackDetected = true;
+          rollbackPieceIdx = tempF.piece;
+        }
         break;
       }
     } else {
@@ -270,6 +304,17 @@ export function precomputeFullRideTelemetry(
     if (Math.abs(latG) > maxLat) maxLat = Math.abs(latG);
     if (tempF.special === 3 || vertG < 0.2) airtime += dt;
 
+    if (s > track.liftEnd + 4) {
+      if (spd < minSpeedAfterLift) {
+        minSpeedAfterLift = spd;
+        minSpeedPieceIdx = tempF.piece;
+      }
+      if (v < -0.3 && !rollbackDetected) {
+        rollbackDetected = true;
+        rollbackPieceIdx = tempF.piece;
+      }
+    }
+
     // Record telemetry point every 0.08s (~12.5 Hz sample rate)
     if (runTime - lastSampleT >= 0.08 || s >= track.length) {
       lastSampleT = runTime;
@@ -284,6 +329,38 @@ export function precomputeFullRideTelemetry(
     }
   }
 
+  const problemPiece = rollbackPieceIdx ?? (stalled ? tempF.piece : (minSpeedAfterLift < 4.5 ? minSpeedPieceIdx : null));
+  const isError = stalled || rollbackDetected || (s < track.length * 0.92);
+  const isWarning = !isError && minSpeedAfterLift < 4.5;
+
+  let feasibilityStatus: 'ok' | 'warning' | 'error' = 'ok';
+  let feasibilityMessage = '';
+
+  const pieceName = (problemPiece != null && track.pieces && track.pieces[problemPiece])
+    ? track.pieces[problemPiece].kind
+    : 'slope';
+
+  if (isError) {
+    feasibilityStatus = 'error';
+    feasibilityMessage = `Rollback Failure at Piece #${(problemPiece ?? 0) + 1} (${pieceName}): Slope hill crest exceeds train kinetic energy`;
+  } else if (isWarning) {
+    feasibilityStatus = 'warning';
+    feasibilityMessage = `Severe Slowdown at Piece #${(problemPiece ?? 0) + 1} (${pieceName}): Speed drops to ${minSpeedAfterLift.toFixed(1)} mph (risk of valleying)`;
+  } else {
+    feasibilityStatus = 'ok';
+    const minMph = isFinite(minSpeedAfterLift) ? minSpeedAfterLift.toFixed(1) : maxSpeed.toFixed(1);
+    feasibilityMessage = `Feasibility Nominal • Full circuit cleared • Min speed ${minMph} mph (Piece #${(minSpeedPieceIdx ?? 0) + 1})`;
+  }
+
+  const feasibility: TrackFeasibility = {
+    status: feasibilityStatus,
+    message: feasibilityMessage,
+    problemPieceIndex: isError || isWarning ? problemPiece : null,
+    minSpeedMph: isFinite(minSpeedAfterLift) ? minSpeedAfterLift : 0,
+    minSpeedPieceIndex: minSpeedPieceIdx,
+    isRollback: isError,
+  };
+
   return {
     telemetry: pts,
     maxSpeed,
@@ -292,6 +369,7 @@ export function precomputeFullRideTelemetry(
     totalDuration: runTime,
     airtime,
     stalled,
+    feasibility,
   };
 }
 
@@ -471,9 +549,12 @@ export function stepSim(st: SimState, track: BuiltTrack, dt: number, cfg: SimSet
         accel -= cfg.brakeForce;
       }
     } else if (f.special === 2 && velV > -0.5) {
-      // Linear induction motor (LSM) launch thrust - uncapped for extreme acceleration
+      // Linear induction motor (LSM) launch thrust - customized per piece
       if (velV < 500) {
-        accel += cfg.boostForce;
+        const pIdx = f.piece;
+        const pDef = track.pieces ? track.pieces[pIdx] : undefined;
+        const intensity = pDef?.boostIntensity ?? (pDef?.kind === 'boost' ? pDef.power : 1.0);
+        accel += cfg.boostForce * intensity;
       }
     }
 
