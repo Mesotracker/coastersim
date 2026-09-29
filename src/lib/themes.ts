@@ -10,6 +10,15 @@ export interface Theme {
 
 export const THEMES: Theme[] = [
   {
+    name: 'Platinum Gold',
+    rail: '#f8fafc',
+    spine: '#c99535',
+    tie: '#e8c66a',
+    support: '#aeb6c2',
+    car: '#f2c14e',
+    accent: '#d4af37',
+  },
+  {
     name: 'Classic Red',
     rail: '#e2e8f0',
     spine: '#dc2626',

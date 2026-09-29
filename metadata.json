@@ -1,6 +1,6 @@
 {
-  "name": "Coaster Forge",
-  "description": "Rollercoaster designer and 3D POV ride simulator with realistic physics, loop track editing, imperial telemetry, and real-time speed graph.",
+  "name": "Coaster Forge Platinum",
+  "description": "A standalone rollercoaster studio with deterministic 240 Hz SI physics, detailed polygon scenery, draggable ground-clipped pools, lamp-lit cave tunnels, physical waterfalls and ballistic spray, raycast inspection, atmospheric fog, and cinematic playback.",
   "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+  "majorCapabilities": ["3D_TRACK_DESIGN", "ENVIRONMENT_BUILDING", "WATER_PHYSICS", "REALTIME_PHYSICS", "OFFLINE_SINGLE_FILE"]
 }

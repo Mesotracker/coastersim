@@ -5,7 +5,7 @@
  */
 
 import { SimState, SimSettings } from './physics';
-import { BuiltTrack } from './track';
+import { BuiltTrack, indexAt } from './track';
 
 class CoasterAudioEngine {
   private ctx: AudioContext | null = null;
@@ -214,14 +214,17 @@ class CoasterAudioEngine {
 
     // Check special track piece at train's front position
     let special = 0;
-    if (track && track.samples && track.samples.length > 0) {
-      const idx = Math.min(
-        track.samples.length - 1,
-        Math.max(0, Math.floor(s / (track.samples[1]?.s - track.samples[0]?.s || 1))),
-      );
+    let activePiece = -1;
+    if (track?.samples?.length > 0) {
+      const idx = indexAt(track, s);
       special = track.samples[idx]?.special ?? 0;
+      activePiece = track.samples[idx]?.piece ?? -1;
     }
 
+    const waterfallFlow = track.scenery.reduce(
+      (sum, block) => block.kind === 'waterfall' && block.pieceIndex === activePiece ? sum + (block.flow ?? 1) : sum,
+      0,
+    );
     const isOnLift = s < track.liftEnd && speed < 18 && speed > 0.5;
 
     // 1. Wheel Track Roar Synthesis
@@ -248,8 +251,9 @@ class CoasterAudioEngine {
 
       // Wind ramps up nonlinearly above 28 mph
       const windIntensity = Math.max(0, (speed - 28) / 80);
-      const targetWindGain = Math.min(0.38, Math.pow(windIntensity, 1.4) * 0.38);
-      this.windGain.gain.setTargetAtTime(targetWindGain, now, 0.07);
+      const waterHiss = Math.min(0.2, waterfallFlow * 0.12);
+      const targetWindGain = Math.min(0.48, Math.pow(windIntensity, 1.4) * 0.38 + waterHiss);
+      this.windGain.gain.setTargetAtTime(targetWindGain, now, waterfallFlow > 0 ? 0.025 : 0.07);
     }
 
     // 3. Chain Lift Ratchet Clank Sound

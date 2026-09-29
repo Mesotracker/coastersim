@@ -19,6 +19,12 @@ export type PieceKind =
   | 'zeroGRoll'
   | 'corkscrew'
   | 'immelmann'
+  | 'bunnyHop'
+  | 'heartlineRoll'
+  | 'helixL'
+  | 'helixR'
+  | 'diveDrop'
+  | 'sBend'
   | 'jump'
   | 'brake'
   | 'boost';
@@ -38,10 +44,35 @@ export interface Piece {
   boostIntensity?: number;
 }
 
+export type SceneryKind = 'waterPool' | 'cave' | 'waterfall';
+
+export interface SceneryBlock {
+  id: string;
+  kind: SceneryKind;
+  /** Detached world-space placement for pools and editor map handles. */
+  x: number;
+  z: number;
+  /** Scale controls pool radius, tunnel clearance, or waterfall curtain width. */
+  scale: number;
+  /** Pools are clamped to groundY + elevation. */
+  elevation: number;
+  /** Cave / waterfall attachment. Water pools deliberately leave this undefined. */
+  pieceIndex?: number;
+  /** Cave architectural lighting. */
+  lamps?: boolean;
+  lampColor?: string;
+  lampDensity?: number;
+  /** Water volume multiplier and associated hydrodynamic speed loss. */
+  flow?: number;
+  /** Optional cave parent so waterfalls render beneath the same rocky envelope. */
+  parentId?: string;
+}
+
 export interface TrackDef {
   origin: { x: number; y: number };
   startPitch: number; // degrees
   pieces: Piece[];
+  scenery?: SceneryBlock[];
 }
 
 export interface Seg {
@@ -183,6 +214,78 @@ export const PIECE_DEFS: Record<PieceKind, PieceDef> = {
       { len: 20, pitch: -45, yaw: 0, roll: 0 },
     ],
   },
+  bunnyHop: {
+    label: 'Bunny Hop',
+    color: '#f59e0b',
+    hint: 'Compact parabolic airtime hill with a smooth pullout',
+    target: 0,
+    glyph: 'M2 18c4 0 5-9 10-9s6 9 10 9',
+    body: [
+      { len: 26, pitch: 29, yaw: 0 },
+      { len: 58, pitch: -58, yaw: 0 },
+      { len: 26, pitch: 29, yaw: 0 },
+    ],
+  },
+  heartlineRoll: {
+    label: 'Heartline Roll',
+    color: '#d946ef',
+    hint: 'Precisely centered 360° axial roll with mild elevation change',
+    target: 0,
+    glyph: 'M2 12c3-8 7 8 10 0s7 8 10 0',
+    body: [
+      { len: 30, pitch: 12, yaw: 0, roll: 80 },
+      { len: 74, pitch: -24, yaw: 0, roll: 200 },
+      { len: 30, pitch: 12, yaw: 0, roll: 80 },
+    ],
+  },
+  helixL: {
+    label: 'Helix Left',
+    color: '#14b8a6',
+    hint: 'Sustained 270° descending left-hand banked helix',
+    target: 0,
+    glyph: 'M20 6c-9-4-17 0-14 5s13 5 12 0-9-4-10 1 8 6 12 2',
+    body: [
+      { len: 94, pitch: -8, yaw: -90 },
+      { len: 94, pitch: 0, yaw: -90 },
+      { len: 94, pitch: 8, yaw: -90 },
+    ],
+  },
+  helixR: {
+    label: 'Helix Right',
+    color: '#0d9488',
+    hint: 'Sustained 270° descending right-hand banked helix',
+    target: 0,
+    glyph: 'M4 6c9-4 17 0 14 5S5 16 6 11s9-4 10 1-8 6-12 2',
+    body: [
+      { len: 94, pitch: -8, yaw: 90 },
+      { len: 94, pitch: 0, yaw: 90 },
+      { len: 94, pitch: 8, yaw: 90 },
+    ],
+  },
+  diveDrop: {
+    label: 'Vertical Dive',
+    color: '#f43f5e',
+    hint: 'Near-vertical 82° plunge with a clothoid-style pullout',
+    target: 0,
+    glyph: 'M3 4h8c5 0 7 3 7 8v8 M14 17l4 3 3-4',
+    body: [
+      { len: 66, pitch: -82, yaw: 0 },
+      { len: 74, pitch: 0, yaw: 0 },
+      { len: 82, pitch: 82, yaw: 0 },
+    ],
+  },
+  sBend: {
+    label: 'S-Bend',
+    color: '#38bdf8',
+    hint: 'Fast alternating lateral transition with continuous banking',
+    target: 0,
+    glyph: 'M3 18c2-9 7-3 9-9s7 0 9-5',
+    body: [
+      { len: 76, pitch: 0, yaw: 42 },
+      { len: 112, pitch: 0, yaw: -84 },
+      { len: 76, pitch: 0, yaw: 42 },
+    ],
+  },
   jump: {
     label: 'Mid-Air Jump',
     color: '#0284c7',
@@ -228,6 +331,12 @@ export const PIECE_ORDER: PieceKind[] = [
   'zeroGRoll',
   'corkscrew',
   'immelmann',
+  'bunnyHop',
+  'heartlineRoll',
+  'helixL',
+  'helixR',
+  'diveDrop',
+  'sBend',
   'jump',
   'brake',
   'boost',
@@ -239,7 +348,8 @@ export const FEET_PER_METER = 3.28084;
 export const FEET_PER_UNIT = METERS_PER_UNIT * FEET_PER_METER; // ~1.4435 ft per unit
 export const MPH_PER_MPS = 2.236936; // 1 m/s = 2.23694 mph
 export const FT_PER_M = 3.28084;
-export const GRAVITY = 9.81;
+// Standard gravity (ISO 80000 / NIST), used throughout the SI physics solver.
+export const GRAVITY = 9.80665;
 
 export interface Sample {
   s: number;
@@ -273,6 +383,7 @@ export interface BuiltTrack {
   center3: { x: number; z: number };
   radius3: number;
   pieces?: Piece[];
+  scenery: SceneryBlock[];
 }
 
 const DEG = Math.PI / 180;
@@ -315,7 +426,8 @@ export function segsFor(piece: Piece, entryPitch = 0): Seg[] {
     piece.kind === 'loop' ||
     piece.kind === 'zeroGRoll' ||
     piece.kind === 'corkscrew' ||
-    piece.kind === 'immelmann';
+    piece.kind === 'immelmann' ||
+    piece.kind === 'heartlineRoll';
 
   for (const s of def.body) {
     out.push({
@@ -471,7 +583,9 @@ export function buildTrack(track: TrackDef): BuiltTrack {
     const sm = samples[i];
     if (sm.s > maxLift) break;
     const kind = track.pieces[sm.piece]?.kind;
-    if (kind === 'loop' || sm.special !== 0) break;
+    // Holding brakes may cap a lift hill, so the chain remains engaged through
+    // their entry transition. Launches, jumps and inversions end the lift zone.
+    if (kind === 'loop' || kind === 'boost' || kind === 'jump') break;
     if (sm.s > 8 && Math.sin(sm.pitch) < -0.03) break;
     liftEnd = sm.s;
   }
@@ -495,6 +609,7 @@ export function buildTrack(track: TrackDef): BuiltTrack {
     center3: { x: cx, z: cz },
     radius3,
     pieces: track.pieces,
+    scenery: track.scenery ?? [],
   };
 }
 
@@ -594,6 +709,21 @@ let uid = 0;
 export function newPiece(kind: PieceKind): Piece {
   uid += 1;
   return { id: `p${uid}_${Math.random().toString(36).slice(2, 7)}`, kind, len: 1, power: 1, rot: 0 };
+}
+
+export function newSceneryBlock(kind: SceneryKind, overrides?: Partial<SceneryBlock>): SceneryBlock {
+  uid += 1;
+  const base: SceneryBlock = {
+    id: `s${uid}_${Math.random().toString(36).slice(2, 7)}`,
+    kind,
+    x: 0,
+    z: 0,
+    scale: kind === 'waterPool' ? 1.4 : 1,
+    elevation: kind === 'waterPool' ? 0.18 : 0,
+    ...(kind === 'cave' ? { lamps: true, lampColor: '#f2c14e', lampDensity: 1 } : {}),
+    ...(kind === 'waterfall' ? { flow: 1 } : {}),
+  };
+  return overrides ? { ...base, ...overrides } : base;
 }
 
 export function piece(kind: PieceKind, overrides?: Partial<Piece>): Piece {
@@ -720,8 +850,8 @@ export const PRESETS: Preset[] = [
       startPitch: 0,
       pieces: [
         piece('straight', { len: 1.0 }),
-        piece('boost', { len: 1.5 }),
-        piece('boost', { len: 1.5 }),
+        piece('boost', { len: 1.5, boostIntensity: 2.1 }),
+        piece('boost', { len: 1.5, boostIntensity: 2.1 }),
         piece('up', { len: 1.2, power: 1.5 }),
         piece('up', { len: 1.2, power: 1.5 }),
         piece('hill', { len: 1.1, power: 1.1 }),
@@ -753,6 +883,7 @@ export const PRESETS: Preset[] = [
         piece('up', { len: 1.2 }),
         piece('down', { len: 1.3, power: 1.3 }),
         piece('down', { len: 1.3, power: 1.3 }),
+        piece('boost', { len: 0.9, boostIntensity: 1.35 }),
         piece('zeroGRoll', { len: 1.1 }),
         piece('valley', { len: 1.1 }),
         piece('immelmann', { len: 1.05 }),
@@ -815,6 +946,7 @@ export const PRESETS: Preset[] = [
         piece('down', { len: 1.4, power: 1.7 }),
         piece('down', { len: 1.4, power: 1.7 }),
         piece('valley', { len: 1.2 }),
+        piece('boost', { len: 0.8, boostIntensity: 1.15 }),
         piece('immelmann', { len: 1.1 }),
         piece('curveR', { len: 1.2, power: 1.1 }),
         piece('curveR', { len: 1.2, power: 1.1 }),
@@ -944,5 +1076,19 @@ export const PRESETS: Preset[] = [
 ];
 
 export function defaultTrack(): TrackDef {
-  return PRESETS[0].build();
+  const track = PRESETS[0].build();
+  const cave = newSceneryBlock('cave', {
+    pieceIndex: 8,
+    lamps: true,
+    lampColor: '#f2c14e',
+    lampDensity: 1.1,
+  });
+  return {
+    ...track,
+    scenery: [
+      newSceneryBlock('waterPool', { x: 285, z: 105, scale: 1.65, elevation: 0.18 }),
+      cave,
+      newSceneryBlock('waterfall', { pieceIndex: 8, parentId: cave.id, scale: 1.05, flow: 0.75 }),
+    ],
+  };
 }

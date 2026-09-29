@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Download, Upload, Copy, Check, FileCode, AlertCircle, X, Sparkles, Sliders } from 'lucide-react';
-import { TrackDef, Piece, PieceKind } from '../lib/track';
+import { GRAVITY, TrackDef, Piece, PieceKind, SceneryBlock, newSceneryBlock } from '../lib/track';
 import { SimSettings } from '../lib/physics';
 import { Theme } from '../lib/themes';
 
@@ -56,13 +56,19 @@ function normalizePieceKind(raw: any): PieceKind {
 
   if (/^(straight|flat|level|station|platform|track)$/.test(clean)) return 'straight';
   if (/^(up|lift|chain|chainlift|climb|incline|ascent|steepup)$/.test(clean)) return 'up';
+  if (/^(verticaldive|divedrop|verticaldrop|plunge)$/.test(clean)) return 'diveDrop';
   if (/^(down|drop|dive|descent|decline|steepdown)$/.test(clean)) return 'down';
+  if (/^(helixl|lefthelix|helixleft)$/.test(clean)) return 'helixL';
+  if (/^(helixr|righthelix|helixright)$/.test(clean)) return 'helixR';
   if (/^(curvel|left|turnleft|turnl|bankleft|curveleft)$/.test(clean)) return 'curveL';
   if (/^(curver|right|turnright|turnr|bankright|curveright)$/.test(clean)) return 'curveR';
-  if (/^(hill|camelback|airtime|airtimehill|crest|bunnyhop|hop)$/.test(clean)) return 'hill';
+  if (/^(bunnyhop|hop|speedhill)$/.test(clean)) return 'bunnyHop';
+  if (/^(hill|camelback|airtime|airtimehill|crest)$/.test(clean)) return 'hill';
   if (/^(valley|dip|trough|compression|bottom)$/.test(clean)) return 'valley';
-  if (/^(loop|verticalloop|vertical_loop|inversion|looping)$/.test(clean)) return 'loop';
-  if (/^(zerogroll|zerog|barrelroll|roll|heartline|heartlineroll|inlineroll|inline)$/.test(clean)) return 'zeroGRoll';
+  if (/^(sbend|esses|serpentine)$/.test(clean)) return 'sBend';
+  if (/^(loop|verticalloop|inversion|looping)$/.test(clean)) return 'loop';
+  if (/^(heartline|heartlineroll|inlineroll|inline)$/.test(clean)) return 'heartlineRoll';
+  if (/^(zerogroll|zerog|barrelroll|roll)$/.test(clean)) return 'zeroGRoll';
   if (/^(corkscrew|cork_screw|screw|flatspin)$/.test(clean)) return 'corkscrew';
   if (/^(immelmann|immelman|diveloop|dive_loop|halfloop)$/.test(clean)) return 'immelmann';
   if (/^(jump|airjump|gap)$/.test(clean)) return 'jump';
@@ -100,6 +106,14 @@ function parseJsonLenient(raw: string): any {
   }
 }
 
+function normalizeGravitySetting(value: unknown, fallback: number) {
+  const parsed = typeof value === 'number' ? value : parseFloat(String(value ?? ''));
+  if (!Number.isFinite(parsed)) return fallback;
+  // Accept both Coaster Forge's multiplier format and common SI JSON (9.80665 m/s²).
+  const multiplier = parsed > 3 && parsed < 30 ? parsed / GRAVITY : parsed;
+  return Math.max(0.1, Math.min(3, multiplier));
+}
+
 const SAMPLE_COASTERS = [
   {
     name: 'Giga Hyperion (Airtime Monster)',
@@ -134,9 +148,9 @@ const SAMPLE_COASTERS = [
         settings: {
           friction: 0.006,
           drag: 0.00035,
-          gravity: 9.81,
+          gravity: 1,
           trainMassKg: 5000,
-          gBuffer: 1.8,
+          gForceBuffer: 0,
           material: 'metal',
         },
       },
@@ -386,7 +400,7 @@ export default function ImportExportModal({
           const physSettings: SimSettings = {
             friction: typeof rawPhys.friction === 'number' ? rawPhys.friction : (parseFloat(rawPhys.friction) || settings.friction),
             drag: typeof rawPhys.drag === 'number' ? rawPhys.drag : (parseFloat(rawPhys.drag) || settings.drag),
-            gravity: typeof rawPhys.gravity === 'number' ? rawPhys.gravity : (parseFloat(rawPhys.gravity) || settings.gravity),
+            gravity: normalizeGravitySetting(rawPhys.gravity, settings.gravity),
             liftSpeed: typeof rawPhys.liftSpeed === 'number' ? rawPhys.liftSpeed : (parseFloat(rawPhys.liftSpeed) || settings.liftSpeed),
             launch: typeof rawPhys.launch === 'number' ? rawPhys.launch : (parseFloat(rawPhys.launch) || settings.launch),
             brakeForce: typeof rawPhys.brakeForce === 'number' ? rawPhys.brakeForce : (parseFloat(rawPhys.brakeForce) || settings.brakeForce),
@@ -439,6 +453,35 @@ export default function ImportExportModal({
         };
       });
 
+      const rawScenery = parsed.track?.scenery ?? parsed.scenery ?? parsed.data?.scenery ?? [];
+      const sanitizedScenery: SceneryBlock[] = Array.isArray(rawScenery)
+        ? rawScenery.flatMap((raw: any) => {
+            const clean = String(raw?.kind ?? raw?.type ?? '').toLowerCase().replace(/[-_\s]/g, '');
+            const kind = clean === 'waterpool' || clean === 'pool'
+              ? 'waterPool'
+              : clean === 'cave' || clean === 'tunnel' || clean === 'rockcave'
+                ? 'cave'
+                : clean === 'waterfall' || clean === 'watercurtain'
+                  ? 'waterfall'
+                  : null;
+            if (!kind) return [];
+            const block = newSceneryBlock(kind, {
+              x: Number.isFinite(Number(raw.x)) ? Number(raw.x) : 0,
+              z: Number.isFinite(Number(raw.z)) ? Number(raw.z) : 0,
+              scale: Math.max(0.35, Math.min(4, Number(raw.scale) || 1)),
+              elevation: Math.max(0, Math.min(3, Number(raw.elevation) || 0)),
+              pieceIndex: kind === 'waterPool' ? undefined : Math.max(0, Math.min(sanitizedPieces.length - 1, Number(raw.pieceIndex) || 0)),
+              lamps: kind === 'cave' ? raw.lamps !== false : undefined,
+              lampColor: kind === 'cave' && typeof raw.lampColor === 'string' ? raw.lampColor : undefined,
+              lampDensity: kind === 'cave' ? Math.max(0.4, Math.min(2, Number(raw.lampDensity) || 1)) : undefined,
+              flow: kind === 'waterfall' ? Math.max(0.2, Math.min(2, Number(raw.flow) || 1)) : undefined,
+              parentId: kind === 'waterfall' && typeof raw.parentId === 'string' ? raw.parentId : undefined,
+            });
+            if (typeof raw.id === 'string') block.id = raw.id;
+            return [block];
+          })
+        : [];
+
       if (sanitizedPieces.length === 0) {
         setImportError('The track file contains no track pieces.');
         return null;
@@ -467,12 +510,12 @@ export default function ImportExportModal({
         finalSettings = {
           friction: parseNum(rawSettingsSource.friction, settings.friction),
           drag: parseNum(rawSettingsSource.drag, settings.drag),
-          gravity: parseNum(rawSettingsSource.gravity, settings.gravity),
+          gravity: normalizeGravitySetting(rawSettingsSource.gravity, settings.gravity),
           liftSpeed: parseNum(rawSettingsSource.liftSpeed, settings.liftSpeed),
           launch: parseNum(rawSettingsSource.launch, settings.launch),
           brakeForce: parseNum(rawSettingsSource.brakeForce, settings.brakeForce),
           boostForce: parseNum(rawSettingsSource.boostForce, settings.boostForce),
-          gForceBuffer: parseNum(rawSettingsSource.gForceBuffer ?? rawSettingsSource.gBuffer, settings.gForceBuffer ?? 0.25),
+          gForceBuffer: parseNum(rawSettingsSource.gForceBuffer ?? rawSettingsSource.gBuffer, settings.gForceBuffer ?? 0),
           material: ['metal', 'wood', 'plastic'].includes(rawSettingsSource.material) ? rawSettingsSource.material : settings.material,
         };
       }
@@ -481,6 +524,7 @@ export default function ImportExportModal({
         origin: { x: originX, y: originY },
         startPitch: typeof targetStartPitch === 'number' ? targetStartPitch : (parseFloat(targetStartPitch) || 0),
         pieces: sanitizedPieces,
+        scenery: sanitizedScenery,
       };
 
       return {

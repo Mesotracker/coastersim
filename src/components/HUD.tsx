@@ -332,7 +332,7 @@ export default function HUD({
 
       {/* Top-right Camera modes, Weather, Audio Synth & Tools */}
       <div className="pointer-events-auto absolute right-2.5 top-2.5 sm:right-3 sm:top-3 flex flex-col items-end gap-1.5 sm:gap-2 z-10">
-        <div className="flex items-center gap-1.5">
+        <div className="flex max-w-[72vw] flex-wrap items-center justify-end gap-1.5">
           {/* Dynamic Audio Synthesizer Control */}
           <div className="relative flex items-center">
             <button
@@ -595,11 +595,11 @@ export default function HUD({
               {/* Playback speed selector */}
               {setSimSpeed && (
                 <div className="flex items-center rounded-xl bg-white/10 p-0.5 ring-1 ring-white/10 text-[10px] sm:text-xs font-bold">
-                  {([0.5, 1, 2] as const).map((spd) => (
+                  {([0.25, 0.5, 1, 2, 4] as const).map((spd) => (
                     <button
                       key={spd}
                       onClick={() => setSimSpeed(spd)}
-                      title={`Replay Speed: ${spd}x ${spd < 1 ? '(Slow Motion)' : ''}`}
+                      title={`Replay Speed: ${spd}x · physics remains fixed at 240 Hz ${spd < 1 ? '(Slow Motion)' : ''}`}
                       className={`rounded-lg px-2 py-1 transition ${
                         simSpeed === spd
                           ? 'bg-sky-500 text-white shadow-sm'
