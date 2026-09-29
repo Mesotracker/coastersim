@@ -136,8 +136,9 @@ export default function Editor2D(props: Props) {
 
       // background
       const grd = ctx.createLinearGradient(0, 0, 0, h);
-      grd.addColorStop(0, '#f8fafc');
-      grd.addColorStop(1, '#eef2f7');
+      grd.addColorStop(0, '#0b0e13');
+      grd.addColorStop(0.55, '#11151b');
+      grd.addColorStop(1, '#171b21');
       ctx.fillStyle = grd;
       ctx.fillRect(0, 0, w, h);
 
@@ -152,7 +153,7 @@ export default function Editor2D(props: Props) {
         ctx.lineWidth = 1;
         for (let gx = x0; gx <= x1; gx += minor) {
           const major = Math.abs(gx % 100) < 0.01;
-          ctx.strokeStyle = major ? 'rgba(100,116,139,0.20)' : 'rgba(100,116,139,0.09)';
+          ctx.strokeStyle = major ? 'rgba(212,175,55,0.20)' : 'rgba(174,182,194,0.075)';
           ctx.beginPath();
           ctx.moveTo(Math.round(X(gx)) + 0.5, 0);
           ctx.lineTo(Math.round(X(gx)) + 0.5, h);
@@ -160,7 +161,7 @@ export default function Editor2D(props: Props) {
         }
         for (let gy = y0; gy <= y1; gy += minor) {
           const major = Math.abs(gy % 100) < 0.01;
-          ctx.strokeStyle = major ? 'rgba(100,116,139,0.20)' : 'rgba(100,116,139,0.09)';
+          ctx.strokeStyle = major ? 'rgba(212,175,55,0.20)' : 'rgba(174,182,194,0.075)';
           ctx.beginPath();
           ctx.moveTo(0, Math.round(Y(gy)) + 0.5);
           ctx.lineTo(w, Math.round(Y(gy)) + 0.5);
@@ -171,9 +172,9 @@ export default function Editor2D(props: Props) {
       // ground
       const groundY = built.groundY;
       const gy0 = Y(groundY);
-      ctx.fillStyle = 'rgba(74,222,128,0.16)';
+      ctx.fillStyle = 'rgba(35,75,52,0.22)';
       ctx.fillRect(0, gy0, w, h - gy0);
-      ctx.strokeStyle = 'rgba(22,163,74,0.55)';
+      ctx.strokeStyle = 'rgba(111,155,119,0.48)';
       ctx.lineWidth = 2;
       ctx.beginPath();
       ctx.moveTo(0, gy0 + 0.5);
@@ -191,7 +192,7 @@ export default function Editor2D(props: Props) {
       }
 
       // supports (only where track is right-side up, avoiding spearing through loop apex)
-      ctx.strokeStyle = 'rgba(148,163,184,0.75)';
+      ctx.strokeStyle = 'rgba(174,182,194,0.56)';
       ctx.lineWidth = Math.max(1, 2 * v.zoom);
       const supportEvery = Math.max(6, Math.round(30 / (S[1].s - S[0].s || 1.6)));
       for (let i = 0; i < n; i += supportEvery) {
@@ -260,10 +261,14 @@ export default function Editor2D(props: Props) {
           piece.kind === 'curveR' ||
           piece.kind === 'zeroGRoll' ||
           piece.kind === 'corkscrew' ||
-          piece.kind === 'immelmann'
+          piece.kind === 'immelmann' ||
+          piece.kind === 'heartlineRoll' ||
+          piece.kind === 'helixL' ||
+          piece.kind === 'helixR' ||
+          piece.kind === 'sBend'
         ) {
           ctx.setLineDash(
-            piece.kind === 'zeroGRoll' || piece.kind === 'corkscrew' || piece.kind === 'immelmann'
+            piece.kind === 'zeroGRoll' || piece.kind === 'corkscrew' || piece.kind === 'immelmann' || piece.kind === 'heartlineRoll'
               ? [4, 4]
               : [6, 6],
           );
@@ -292,8 +297,8 @@ export default function Editor2D(props: Props) {
 
       if (selected != null && built.pieceRanges[selected]) {
         const r = built.pieceRanges[selected];
-        strokeRange(r.start, r.end, '#2563eb', Math.max(5, 14 * v.zoom), 0.22);
-        strokeRange(r.start, r.end, '#2563eb', Math.max(1.5, 3 * v.zoom), 0.9);
+        strokeRange(r.start, r.end, '#d4af37', Math.max(5, 14 * v.zoom), 0.25);
+        strokeRange(r.start, r.end, '#f2c14e', Math.max(1.5, 3 * v.zoom), 0.95);
       }
 
       // station platform
@@ -312,10 +317,10 @@ export default function Editor2D(props: Props) {
       const drawNode = (x: number, y: number, active: boolean, big = false) => {
         ctx.beginPath();
         ctx.arc(X(x), Y(y), big ? nodeR * 1.5 : nodeR, 0, Math.PI * 2);
-        ctx.fillStyle = active ? '#2563eb' : '#ffffff';
+        ctx.fillStyle = active ? '#d4af37' : '#161b22';
         ctx.fill();
         ctx.lineWidth = 1.6;
-        ctx.strokeStyle = active ? '#1d4ed8' : '#475569';
+        ctx.strokeStyle = active ? '#f8e8b0' : '#aeb6c2';
         ctx.stroke();
       };
       drawNode(S[0].x, S[0].y, hoverRef.current.origin, hoverRef.current.origin);
@@ -329,7 +334,7 @@ export default function Editor2D(props: Props) {
         const nd = built.nodes[selected];
         ctx.beginPath();
         ctx.arc(X(nd.x), Y(nd.y), nodeR * 3.2, 0, Math.PI * 2);
-        ctx.strokeStyle = 'rgba(37,99,235,0.55)';
+        ctx.strokeStyle = 'rgba(242,193,78,0.68)';
         ctx.setLineDash([4, 4]);
         ctx.lineWidth = 1.4;
         ctx.stroke();
@@ -341,12 +346,12 @@ export default function Editor2D(props: Props) {
         const d = dropRef.current;
         ctx.beginPath();
         ctx.arc(X(d.x), Y(d.y), nodeR * 3.6, 0, Math.PI * 2);
-        ctx.fillStyle = 'rgba(37,99,235,0.18)';
+        ctx.fillStyle = 'rgba(212,175,55,0.20)';
         ctx.fill();
-        ctx.strokeStyle = '#2563eb';
+        ctx.strokeStyle = '#d4af37';
         ctx.lineWidth = 2;
         ctx.stroke();
-        ctx.fillStyle = '#1d4ed8';
+        ctx.fillStyle = '#f2c14e';
         ctx.font = '700 11px ui-sans-serif, system-ui';
         ctx.textAlign = 'center';
         ctx.fillText('insert here', X(d.x), Y(d.y) - nodeR * 5);
@@ -417,8 +422,8 @@ export default function Editor2D(props: Props) {
       const mx = w - MM - pad;
       const my = pad;
       ctx.save();
-      ctx.fillStyle = 'rgba(255,255,255,0.88)';
-      ctx.strokeStyle = 'rgba(148,163,184,0.7)';
+      ctx.fillStyle = 'rgba(7,10,14,0.90)';
+      ctx.strokeStyle = 'rgba(212,175,55,0.46)';
       ctx.lineWidth = 1;
       ctx.beginPath();
       ctx.roundRect(mx, my, MM, MM, 8);
@@ -459,7 +464,7 @@ export default function Editor2D(props: Props) {
       ctx.strokeStyle = '#0f172a';
       ctx.lineWidth = 1;
       ctx.stroke();
-      ctx.fillStyle = 'rgba(71,85,105,0.85)';
+      ctx.fillStyle = 'rgba(232,198,106,0.88)';
       ctx.font = '700 8px ui-sans-serif, system-ui';
       ctx.textAlign = 'left';
       ctx.fillText('TOP VIEW', mx + 7, my + 12);

@@ -6,7 +6,7 @@ interface Props {
 
 export default function Toolbar({ onAdd }: Props) {
   return (
-    <div className="flex gap-2 overflow-x-auto pb-1.5 sm:pb-0 sm:flex-wrap sm:overflow-visible scroll-smooth">
+    <div className="flex gap-2 overflow-x-auto pb-1.5 scroll-smooth snap-x" aria-label="Track piece presets">
       {PIECE_ORDER.map((kind) => {
         const def = PIECE_DEFS[kind];
         return (
@@ -20,7 +20,7 @@ export default function Toolbar({ onAdd }: Props) {
               e.dataTransfer.effectAllowed = 'copy';
             }}
             onClick={() => onAdd(kind)}
-            className="group flex w-[78px] sm:w-[84px] shrink-0 sm:shrink cursor-pointer sm:cursor-grab flex-col items-center gap-1.5 rounded-xl border border-slate-200/90 bg-white px-1.5 sm:px-2 py-2 sm:py-2.5 text-slate-700 shadow-sm transition-all hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-md active:cursor-grabbing active:translate-y-0"
+            className="group flex w-[78px] sm:w-[84px] shrink-0 snap-start cursor-pointer sm:cursor-grab flex-col items-center gap-1.5 rounded-xl border border-slate-200/90 bg-white px-1.5 sm:px-2 py-2 sm:py-2.5 text-slate-700 shadow-sm transition-all hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-md active:cursor-grabbing active:translate-y-0"
           >
             <span
               className="flex h-7 w-full sm:h-8 items-center justify-center rounded-lg transition-transform group-hover:scale-105"

@@ -193,7 +193,13 @@ export default function App() {
   // Handle seeking / scrubbing the replay timeline
   const handleSeek = useCallback((progress: number) => {
     const targetS = Math.max(0, Math.min(builtRef.current.length, progress * builtRef.current.length));
-    seekSim(simRef.current, builtRef.current, targetS, cfgRef.current);
+    seekSim(
+      simRef.current,
+      builtRef.current,
+      targetS,
+      cfgRef.current,
+      precomputedRideRef.current.telemetry,
+    );
     const s = simRef.current;
     setHud((prev) => ({
       ...prev,
@@ -217,14 +223,24 @@ export default function App() {
     const tick = () => {
       raf = requestAnimationFrame(tick);
       const now = performance.now();
-      const dt = Math.min(0.05, ((now - last) / 1000) * simSpeedRef.current);
+      // Playback rate scales simulated time, never solver precision. Catch-up is
+      // capped after a suspended tab and split into stable real-time slices.
+      const wallDt = Math.min(0.25, (now - last) / 1000);
+      const simulationDt = wallDt * simSpeedRef.current;
       last = now;
-      if (playingRef.current) stepSim(simRef.current, builtRef.current, dt, cfgRef.current);
+      if (playingRef.current) {
+        let remaining = simulationDt;
+        while (remaining > 1e-7) {
+          const slice = Math.min(1 / 60, remaining);
+          stepSim(simRef.current, builtRef.current, slice, cfgRef.current);
+          remaining -= slice;
+        }
+      }
 
-      // Procedural audio engine dynamic acoustic synthesis update
+      // Procedural audio reads the final physics state once per rendered frame.
       audioEngine.update(simRef.current, builtRef.current, cfgRef.current, playingRef.current);
 
-      acc += dt;
+      acc += wallDt;
       if (acc > 0.033) {
         acc = 0;
         const s = simRef.current;
@@ -537,6 +553,7 @@ export default function App() {
   // Imperial unit metrics
   const lengthFt = built.length * FEET_PER_UNIT;
   const heightFt = (built.maxHeight - built.groundY) * FEET_PER_UNIT;
+  const mapWidthMi = (Math.max(6500, Math.min(24000, built.radius3 * 9 + 3200)) * FEET_PER_UNIT) / 5280;
   const selectedLengthFt = (() => {
     if (selected == null) return 0;
     const r = built.pieceRanges[selected];
@@ -556,11 +573,11 @@ export default function App() {
   }, []);
 
   return (
-    <div className="flex h-screen min-h-0 flex-col overflow-hidden bg-slate-100 text-slate-900">
+    <div className="premium-shell flex h-screen min-h-0 flex-col overflow-hidden bg-slate-100 text-slate-900">
       {/* ---------------------------------------------------------- header */}
-      <header className="flex h-14 sm:h-16 shrink-0 items-center justify-between border-b border-slate-200 bg-white px-3 sm:px-5 shadow-xs">
+      <header className="premium-header flex h-14 sm:h-16 shrink-0 items-center justify-between border-b border-slate-200 bg-white px-3 sm:px-5 shadow-xs">
         <div className="flex items-center gap-2 sm:gap-3">
-          <div className="flex h-9 w-9 sm:h-10 sm:w-10 items-center justify-center rounded-xl bg-gradient-to-br from-sky-500 via-blue-600 to-indigo-700 shadow-md shadow-blue-500/20 text-white">
+          <div className="premium-logo flex h-9 w-9 sm:h-10 sm:w-10 items-center justify-center rounded-xl bg-gradient-to-br from-sky-500 via-blue-600 to-indigo-700 shadow-md shadow-blue-500/20 text-white">
             <svg
               viewBox="0 0 24 24"
               className="h-5 w-5 sm:h-5.5 sm:w-5.5"
@@ -580,7 +597,7 @@ export default function App() {
             <div className="flex items-center gap-1.5 sm:gap-2">
               <h1 className="text-sm sm:text-base lg:text-lg font-black tracking-tight text-slate-900">Coaster Forge</h1>
               <span className="rounded-full bg-blue-50 px-1.5 sm:px-2 py-0.5 text-[9px] sm:text-[10px] font-bold text-blue-700 ring-1 ring-blue-200/80">
-                PRO 3D
+                PLATINUM
               </span>
             </div>
             <p className="hidden xs:block text-[11px] sm:text-xs font-medium text-slate-500">Physics Simulation &amp; Track Designer</p>
@@ -590,6 +607,8 @@ export default function App() {
         {/* Imperial Summary Metrics Bar */}
         <div className="hidden items-center gap-4 rounded-xl border border-slate-200 bg-slate-50/80 px-4 py-2 lg:flex">
           <Metric label="Pieces" value={`${track.pieces.length}`} />
+          <div className="h-5 w-px bg-slate-200" />
+          <Metric label="Map" value={`${mapWidthMi.toFixed(1)} mi`} />
           <div className="h-5 w-px bg-slate-200" />
           <Metric label="Length" value={`${lengthFt.toFixed(0)} ft`} />
           <div className="h-5 w-px bg-slate-200" />
@@ -741,7 +760,7 @@ export default function App() {
       )}
 
       {/* ------------------------------------------------------------ body */}
-      <main className="flex min-h-0 flex-1 flex-col overflow-hidden p-2 sm:p-3.5 gap-2 sm:gap-3">
+      <main className="premium-workspace flex min-h-0 flex-1 flex-col overflow-hidden p-2 sm:p-3.5 gap-2 sm:gap-3">
         {/* Mobile View Switcher (3D Ride / 2D Track / Workbench) */}
         <div className="flex lg:hidden items-center justify-between p-1 rounded-xl bg-slate-200/90 shadow-inner">
           <button
@@ -777,7 +796,7 @@ export default function App() {
         <div className="hidden lg:flex items-center justify-between px-1">
           <div className="flex items-center gap-2 text-xs font-bold text-slate-500">
             <span className="text-slate-700">Desktop Viewport:</span>
-            <span>Real-time continuous 60FPS physics engine with Imperial metrics</span>
+            <span>Deterministic SI physics · 240 Hz solver · real-time raycast inspection</span>
           </div>
           <div className="flex items-center gap-1 rounded-xl border border-slate-200 bg-white p-1 shadow-xs">
             <button
@@ -828,7 +847,7 @@ export default function App() {
         >
           {/* ------------------------------------------------- left: designer & workbench */}
           <section
-            className={`flex-col gap-3 min-h-0 overflow-hidden ${
+            className={`premium-designer flex-col gap-3 min-h-0 overflow-hidden ${
               mobileTab === 'ride' ? 'hidden lg:flex' : 'flex h-full'
             } ${
               layoutMode === 'wide-ride'
@@ -845,7 +864,7 @@ export default function App() {
                   <h2 className="text-xs font-bold uppercase tracking-wider text-slate-600">
                     Track Elements
                   </h2>
-                  <span className="text-[11px] text-slate-400">Click to append, or drag onto canvas</span>
+                  <span className="text-[11px] text-slate-400">20 precision presets · click or drag to canvas</span>
                 </div>
                 <label className="flex cursor-pointer items-center gap-2 text-xs font-bold text-slate-600">
                   <input
@@ -1055,12 +1074,12 @@ export default function App() {
                       onChange={(v) => setSettings((s) => ({ ...s, brakeForce: v }))}
                     />
                     <MiniSlider
-                      label="G-Force Buffer"
-                      value={settings.gForceBuffer ?? 0.25}
+                      label="Seat Compliance"
+                      value={settings.gForceBuffer ?? 0}
                       min={0}
-                      max={0.8}
-                      step={0.05}
-                      fmt={(v) => `${(v * 100).toFixed(0)}% cushion`}
+                      max={0.35}
+                      step={0.01}
+                      fmt={(v) => (v === 0 ? 'Raw G' : `${(v * 100).toFixed(0)}% absorbed`)}
                       onChange={(v) => setSettings((s) => ({ ...s, gForceBuffer: v }))}
                     />
                     <div className="flex items-end gap-1.5 col-span-1 sm:col-span-2">
@@ -1220,7 +1239,7 @@ export default function App() {
 
           {/* ---------------------------------------------------- right: 3D Viewport */}
           <section
-            className={`relative min-h-[380px] overflow-hidden rounded-2xl border border-slate-200 bg-sky-200 shadow-sm lg:min-h-0 ${
+            className={`premium-viewport relative min-h-[380px] overflow-hidden rounded-2xl border border-slate-200 bg-sky-200 shadow-sm lg:min-h-0 ${
               mobileTab !== 'ride' ? 'hidden lg:block' : 'block h-full'
             } ${
               layoutMode === 'wide-ride'
@@ -1241,6 +1260,10 @@ export default function App() {
               supportConfig={supportConfig}
               gForceHeatMap={gForceHeatMap}
               telemetry={precomputedRide.telemetry}
+              onSelectPiece={(index) => {
+                setSelected(index);
+                setTab('piece');
+              }}
             />
             <HUD
               hud={hud}

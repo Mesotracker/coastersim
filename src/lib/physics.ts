@@ -3,7 +3,7 @@ import { BuiltTrack, FEET_PER_UNIT, Frame, GRAVITY, METERS_PER_UNIT, MPH_PER_MPS
 export type CoasterMaterial = 'metal' | 'wood' | 'plastic';
 
 export interface SimSettings {
-  gravity: number; // multiplier on 9.81
+  gravity: number; // multiplier on standard gravity (9.80665 m/s²)
   friction: number; // rolling resistance coefficient
   drag: number; // air drag coefficient
   liftSpeed: number; // chain lift / station speed (m/s)
@@ -11,19 +11,20 @@ export interface SimSettings {
   brakeForce: number; // m/s^2
   boostForce: number; // m/s^2
   material?: CoasterMaterial;
-  gForceBuffer?: number; // 0.0 to 0.8: softens felt passenger G-forces without altering train velocity
+  /** Seat/restraint compliance applied only to displayed rider loads. 0 = raw physical G. */
+  gForceBuffer?: number;
 }
 
 export const DEFAULT_SETTINGS: SimSettings = {
   gravity: 1,
-  friction: 0.0065, // realistic steel wheels on tubular rails (with wheel rolling drag)
-  drag: 0.00045, // realistic aerodynamic drag profile for train
-  liftSpeed: 5.5, // ~12.3 mph chain lift speed
-  launch: 7.5, // ~16.8 mph station dispatch drive
-  brakeForce: 7.5, // ~0.76 G deceleration
-  boostForce: 13, // ~1.33 G linear induction motor boost
+  friction: 0.0065, // polyurethane wheel + bearing rolling resistance under load
+  drag: 0.00045, // CdA/(2m), producing quadratic SI acceleration in m/s²
+  liftSpeed: 3.2, // ~7.2 mph, representative modern chain-lift speed
+  launch: 2.8, // ~6.3 mph station drive-tire dispatch
+  brakeForce: 4.5, // ~0.46 G service-brake deceleration
+  boostForce: 9.5, // ~0.97 G LSM/LIM launch acceleration
   material: 'metal',
-  gForceBuffer: 0.25, // 25% G-force dampener (softens spikes without reducing speed)
+  gForceBuffer: 0, // telemetry defaults to raw, physically calculated rider forces
 };
 
 export type Phase = 'station' | 'riding' | 'finished';
@@ -113,6 +114,84 @@ export interface TrackFeasibility {
 
 const f: Frame = makeFrame();
 
+// Coaster wheelsets are a small fraction of total train mass. This is the
+// translational share of gravity after accounting for wheel rotational inertia.
+const WHEEL_INERTIA_EFFICIENCY = 0.985;
+
+function smoothstep01(v: number) {
+  const t = Math.max(0, Math.min(1, v));
+  return t * t * (3 - 2 * t);
+}
+
+/** Smoothly engages brakes/LSMs at section boundaries instead of applying an impossible force step. */
+function poweredSectionEnvelope(track: BuiltTrack, frame: Frame): number {
+  const range = track.pieceRanges[frame.piece];
+  if (!range) return 1;
+  const s0 = track.samples[range.start]?.s ?? frame.s;
+  const s1 = track.samples[range.end]?.s ?? frame.s;
+  const span = Math.max(1, s1 - s0);
+  const edge = Math.min(12, span * 0.18);
+  return smoothstep01((frame.s - s0) / edge) * smoothstep01((s1 - frame.s) / edge);
+}
+
+/**
+ * Longitudinal train acceleration in SI units. Both live playback and offline
+ * telemetry call this exact function, keeping the predicted and rendered ride
+ * numerically consistent at every playback speed.
+ */
+function longitudinalAcceleration(
+  track: BuiltTrack,
+  cfg: SimSettings,
+  posS: number,
+  velV: number,
+  out: Frame,
+): number {
+  frameAt(track, posS, out);
+  const g = GRAVITY * cfg.gravity;
+  const sinP = Math.sin(out.pitch);
+  const cosP = Math.cos(out.pitch);
+
+  // Gravity along the tangent, corrected for wheel rotational inertia.
+  let accel = -g * sinP * WHEEL_INERTIA_EFFICIENCY;
+
+  // Aerodynamic drag: a = CdA/(2m) * v², opposing motion.
+  accel -= cfg.drag * velV * Math.abs(velV);
+
+  // Rolling resistance rises with the resultant running/guide/upstop wheel load.
+  const kappaM = out.kappa / METERS_PER_UNIT;
+  const yawRateM = out.yawRate / METERS_PER_UNIT;
+  const vv = velV * velV;
+  const aNormVert = g * cosP + vv * kappaM;
+  const aNormLat = vv * yawRateM;
+  const wheelLoad = Math.hypot(aNormVert, aNormLat);
+  if (Math.abs(velV) > 0.04 && out.special !== 3) {
+    const effectiveLoad = Math.max(g * 0.2, wheelLoad);
+    const materialFactor = cfg.material === 'wood' ? 1.45 : cfg.material === 'plastic' ? 0.9 : 1;
+    accel -= cfg.friction * materialFactor * effectiveLoad * Math.sign(velV);
+  }
+
+  const poweredEnvelope = poweredSectionEnvelope(track, out);
+  if (out.special === 1 && velV > 5.5) {
+    accel -= cfg.brakeForce * poweredEnvelope;
+  } else if (out.special === 2 && velV > -0.5) {
+    const pDef = track.pieces?.[out.piece];
+    const intensity = pDef?.boostIntensity ?? (pDef?.kind === 'boost' ? pDef.power : 1);
+    accel += cfg.boostForce * intensity * poweredEnvelope;
+  }
+
+  // Drive tires use proportional control, avoiding a discontinuity at target speed.
+  if (posS < STATION_LEN * 0.75 && velV < cfg.launch) {
+    accel += Math.max(0, (cfg.launch - velV) * 3.8);
+  }
+
+  // Chain dog / anti-rollback control. The clamp in the integrator prevents slip-back.
+  if (posS < track.liftEnd && velV < cfg.liftSpeed) {
+    accel = Math.max(accel, (cfg.liftSpeed - velV) * 4.5);
+  }
+
+  return accel;
+}
+
 /**
  * Precomputes the entire ride speed profile and telemetry ahead of time.
  * Runs deterministic simulation along the built track from station rollout to final brake run.
@@ -165,8 +244,8 @@ export function precomputeFullRideTelemetry(
   let stallTimer = 0;
   let stalled = false;
 
-  const dt = 1 / 120; // 120Hz high-precision integration step
-  const maxSimSteps = 120 * 300; // max 5 minutes simulation cap
+  const dt = 1 / 240; // matches live solver: deterministic 240 Hz integration
+  const maxSimSteps = 240 * 300; // max 5 minutes simulation cap
   let step = 0;
 
   // Initial station point
@@ -181,51 +260,8 @@ export function precomputeFullRideTelemetry(
     s: 0,
   });
 
-  const getAccel = (posS: number, velV: number): number => {
-    frameAt(track, posS, tempF);
-    const sinP = Math.sin(tempF.pitch);
-    const cosP = Math.cos(tempF.pitch);
-
-    // Mechanical wheel rotational inertia factor: ~0.94 of gravitational acceleration converts to linear track speed
-    let accel = -g * sinP * 0.94;
-    accel -= cfg.drag * velV * Math.abs(velV);
-
-    const kappaM = tempF.kappa / METERS_PER_UNIT;
-    const yawRateM = tempF.yawRate / METERS_PER_UNIT;
-    const vv = velV * velV;
-    const aNormVert = g * cosP + vv * kappaM;
-    const aNormLat = vv * yawRateM;
-    const aNormTotal = Math.sqrt(aNormVert * aNormVert + aNormLat * aNormLat);
-
-    if (Math.abs(velV) > 0.04) {
-      if (tempF.special !== 3) {
-        const effLoad = Math.max(g * 0.2, aNormTotal);
-        const matMult = cfg.material === 'wood' ? 1.45 : cfg.material === 'plastic' ? 0.9 : 1.0;
-        accel -= cfg.friction * matMult * effLoad * Math.sign(velV);
-      }
-    }
-
-    if (tempF.special === 1) {
-      // Trim brakes
-      if (velV > 5.5) accel -= cfg.brakeForce;
-    } else if (tempF.special === 2 && velV > -0.5) {
-      // Boost: scaled by piece-specific boost intensity or power
-      const pIdx = tempF.piece;
-      const pDef = track.pieces ? track.pieces[pIdx] : undefined;
-      const intensity = pDef?.boostIntensity ?? (pDef?.kind === 'boost' ? pDef.power : 1.0);
-      accel += cfg.boostForce * intensity;
-    }
-
-    if (posS < STATION_LEN * 0.75 && velV < cfg.launch) {
-      accel += Math.max(0, (cfg.launch - velV) * 3.8);
-    }
-
-    if (posS < track.liftEnd && velV < cfg.liftSpeed) {
-      accel = Math.max(accel, (cfg.liftSpeed - velV) * 4.5);
-    }
-
-    return accel;
-  };
+  const getAccel = (posS: number, velV: number): number =>
+    longitudinalAcceleration(track, cfg, posS, velV, tempF);
 
   let minSpeedAfterLift = Infinity;
   let minSpeedPieceIdx: number | null = null;
@@ -291,8 +327,8 @@ export function precomputeFullRideTelemetry(
     const rawVertG = (aNormVert * cosB + aNormLat * sinB) / g;
     const rawLatG = (aNormLat * cosB - aNormVert * sinB) / g;
 
-    // G-Force Buffer: dampens dynamic deviation from 1.0G (comfort dampening without affecting train velocity)
-    const bufferFactor = Math.max(0, Math.min(0.85, cfg.gForceBuffer ?? 0.25));
+    // Optional seat/restraint compliance; zero reports the raw physical rider load.
+    const bufferFactor = Math.max(0, Math.min(0.85, cfg.gForceBuffer ?? 0));
     const vertG = 1.0 + (rawVertG - 1.0) * (1.0 - bufferFactor);
     const latG = rawLatG * (1.0 - bufferFactor);
 
@@ -312,6 +348,8 @@ export function precomputeFullRideTelemetry(
       if (v < -0.3 && !rollbackDetected) {
         rollbackDetected = true;
         rollbackPieceIdx = tempF.piece;
+        stalled = true;
+        break;
       }
     }
 
@@ -376,7 +414,13 @@ export function precomputeFullRideTelemetry(
 /**
  * Instantly synchronizes coaster train position, velocity estimate, height, and G-forces.
  */
-export function seekSim(st: SimState, track: BuiltTrack, targetS: number, cfg?: SimSettings) {
+export function seekSim(
+  st: SimState,
+  track: BuiltTrack,
+  targetS: number,
+  cfg?: SimSettings,
+  profile: readonly TelemetryPoint[] = st.telemetry,
+) {
   if (track.length <= 0) return;
   const clampedS = Math.max(0, Math.min(track.length, targetS));
   st.s = clampedS;
@@ -404,23 +448,30 @@ export function seekSim(st: SimState, track: BuiltTrack, targetS: number, cfg?: 
 
   st.phase = 'riding';
 
-  // Check if we have a recorded telemetry point near this track distance
-  let matchedSpeed: number | null = null;
-  if (st.telemetry.length > 0) {
-    let bestDist = Infinity;
-    for (const pt of st.telemetry) {
-      const dist = Math.abs(pt.s - clampedS);
-      if (dist < bestDist) {
-        bestDist = dist;
-        matchedSpeed = pt.speed;
-      }
+  // Match the deterministic precomputed profile so scrubbing restores time,
+  // velocity and force—not merely an energy-based speed guess.
+  let matched: TelemetryPoint | null = null;
+  if (profile.length > 0) {
+    let lo = 0;
+    let hi = profile.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (profile[mid].s < clampedS) lo = mid + 1;
+      else hi = mid;
     }
-    if (bestDist > 30) matchedSpeed = null;
+    const a = profile[Math.max(0, lo - 1)];
+    const b = profile[lo];
+    matched = !a || Math.abs(b.s - clampedS) <= Math.abs(a.s - clampedS) ? b : a;
+    if (Math.abs(matched.s - clampedS) > 30) matched = null;
   }
 
-  if (matchedSpeed !== null) {
-    st.speed = matchedSpeed;
-    st.v = matchedSpeed / MPH_PER_MPS;
+  if (matched) {
+    st.speed = matched.speed;
+    st.v = matched.speed / MPH_PER_MPS;
+    st.runTime = matched.t;
+    st.g = matched.g;
+    st.lat = matched.lat ?? 0;
+    st.height = matched.height;
   } else {
     // Lift hill vs drop velocity estimation
     const liftEnd = track.liftEnd;
@@ -438,16 +489,21 @@ export function seekSim(st: SimState, track: BuiltTrack, targetS: number, cfg?: 
     }
   }
 
-  const kappaM = f.kappa / METERS_PER_UNIT;
-  const yawRateM = f.yawRate / METERS_PER_UNIT;
-  const vv = st.v * st.v;
-  const g = GRAVITY * (cfg?.gravity ?? 1);
-  const aNormVert = g * Math.cos(f.pitch) + vv * kappaM;
-  const aNormLat = vv * yawRateM;
-  const cosB = Math.cos(f.bank);
-  const sinB = Math.sin(f.bank);
-  st.g = (aNormVert * cosB + aNormLat * sinB) / g;
-  st.lat = (aNormLat * cosB - aNormVert * sinB) / g;
+  if (!matched) {
+    const kappaM = f.kappa / METERS_PER_UNIT;
+    const yawRateM = f.yawRate / METERS_PER_UNIT;
+    const vv = st.v * st.v;
+    const g = GRAVITY * (cfg?.gravity ?? 1);
+    const aNormVert = g * Math.cos(f.pitch) + vv * kappaM;
+    const aNormLat = vv * yawRateM;
+    const cosB = Math.cos(f.bank);
+    const sinB = Math.sin(f.bank);
+    const rawG = (aNormVert * cosB + aNormLat * sinB) / g;
+    const rawLat = (aNormLat * cosB - aNormVert * sinB) / g;
+    const compliance = Math.max(0, Math.min(0.85, cfg?.gForceBuffer ?? 0));
+    st.g = 1 + (rawG - 1) * (1 - compliance);
+    st.lat = rawLat * (1 - compliance);
+  }
 
   if (st.speed > st.maxSpeed) st.maxSpeed = st.speed;
   if (st.g > st.maxG) st.maxG = st.g;
@@ -502,77 +558,11 @@ export function stepSim(st: SimState, track: BuiltTrack, dt: number, cfg: SimSet
 
   // ---- riding physics with 240Hz sub-stepping & midpoint integration --------
   // Fixed sub-step for rock-solid stability and deterministic clock timing
-  const sub = Math.max(1, Math.min(24, Math.ceil(dt / (1 / 240))));
+  const sub = Math.max(1, Math.min(120, Math.ceil(dt / (1 / 240))));
   const h = dt / sub;
 
-  // Helper to compute acceleration at distance s with velocity v
-  const calcAccel = (posS: number, velV: number): number => {
-    frameAt(track, posS, f);
-    const sinP = Math.sin(f.pitch);
-    const cosP = Math.cos(f.pitch);
-
-    // Gravity along track tangent: +pitch = climbing, so -g*sin(pitch)
-    // Mechanical wheel rotational inertia factor: ~0.94 of gravitational acceleration converts to linear track speed
-    let accel = -g * sinP * 0.94;
-
-    // Aerodynamic quadratic drag: a_drag = -C_drag * v * |v|
-    accel -= cfg.drag * velV * Math.abs(velV);
-
-    // Centripetal acceleration in vertical and lateral directions (m/s^2)
-    const kappaM = f.kappa / METERS_PER_UNIT;
-    const yawRateM = f.yawRate / METERS_PER_UNIT;
-    const vv = velV * velV;
-    const aNormVert = g * cosP + vv * kappaM;
-    const aNormLat = vv * yawRateM;
-
-    // Total wheel contact load on running, guide, and upstop wheels:
-    const aNormTotal = Math.sqrt(aNormVert * aNormVert + aNormLat * aNormLat);
-
-    // Rolling resistance: wheel bearing & polyurethane compression
-    if (Math.abs(velV) > 0.04) {
-      // In mid-air jump flight, rolling contact drops to 0!
-      if (f.special === 3) {
-        // Pure ballistic glide
-      } else {
-        // Minimum normal force ensures realistic coasting even at zero-G crest
-        const effLoad = Math.max(g * 0.2, aNormTotal);
-        const matMult = cfg.material === 'wood' ? 1.45 : cfg.material === 'plastic' ? 0.9 : 1.0;
-        accel -= cfg.friction * matMult * effLoad * Math.sign(velV);
-      }
-    }
-
-    // Special track sections
-    if (f.special === 1) {
-      // Trim brakes: magnetic eddy-current or friction calipers
-      const targetBrakeSpeed = 5.5; // m/s (~12 mph)
-      if (velV > targetBrakeSpeed) {
-        accel -= cfg.brakeForce;
-      }
-    } else if (f.special === 2 && velV > -0.5) {
-      // Linear induction motor (LSM) launch thrust - customized per piece
-      if (velV < 500) {
-        const pIdx = f.piece;
-        const pDef = track.pieces ? track.pieces[pIdx] : undefined;
-        const intensity = pDef?.boostIntensity ?? (pDef?.kind === 'boost' ? pDef.power : 1.0);
-        accel += cfg.boostForce * intensity;
-      }
-    }
-
-    // Station dispatch drive tire kicker zone
-    if (posS < STATION_LEN * 0.75 && velV < cfg.launch) {
-      accel += Math.max(0, (cfg.launch - velV) * 3.8);
-    }
-
-    // Mechanical chain lift hill
-    if (posS < track.liftEnd) {
-      if (velV < cfg.liftSpeed) {
-        // Motor dog engagement pushes train steadily up the incline
-        accel = Math.max(accel, (cfg.liftSpeed - velV) * 4.5);
-      }
-    }
-
-    return accel;
-  };
+  const calcAccel = (posS: number, velV: number): number =>
+    longitudinalAcceleration(track, cfg, posS, velV, f);
 
   for (let i = 0; i < sub; i++) {
     // 2nd-order Runge-Kutta / Midpoint Integration
@@ -630,8 +620,8 @@ export function stepSim(st: SimState, track: BuiltTrack, dt: number, cfg: SimSet
   const rawVertG = (aNormVert * cosB + aNormLat * sinB) / g;
   const rawLatG = (aNormLat * cosB - aNormVert * sinB) / g;
 
-  // G-Force Buffer: dampens dynamic deviation from 1.0G (comfort dampening without affecting train velocity)
-  const bufferFactor = Math.max(0, Math.min(0.85, cfg.gForceBuffer ?? 0.25));
+  // Optional seat/restraint compliance; zero reports the raw physical rider load.
+  const bufferFactor = Math.max(0, Math.min(0.85, cfg.gForceBuffer ?? 0));
   st.g = 1.0 + (rawVertG - 1.0) * (1.0 - bufferFactor);
   st.lat = rawLatG * (1.0 - bufferFactor);
 

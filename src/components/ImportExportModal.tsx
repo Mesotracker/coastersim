@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Download, Upload, Copy, Check, FileCode, AlertCircle, X, Sparkles, Sliders } from 'lucide-react';
-import { TrackDef, Piece, PieceKind } from '../lib/track';
+import { GRAVITY, TrackDef, Piece, PieceKind } from '../lib/track';
 import { SimSettings } from '../lib/physics';
 import { Theme } from '../lib/themes';
 
@@ -56,13 +56,19 @@ function normalizePieceKind(raw: any): PieceKind {
 
   if (/^(straight|flat|level|station|platform|track)$/.test(clean)) return 'straight';
   if (/^(up|lift|chain|chainlift|climb|incline|ascent|steepup)$/.test(clean)) return 'up';
+  if (/^(verticaldive|divedrop|verticaldrop|plunge)$/.test(clean)) return 'diveDrop';
   if (/^(down|drop|dive|descent|decline|steepdown)$/.test(clean)) return 'down';
+  if (/^(helixl|lefthelix|helixleft)$/.test(clean)) return 'helixL';
+  if (/^(helixr|righthelix|helixright)$/.test(clean)) return 'helixR';
   if (/^(curvel|left|turnleft|turnl|bankleft|curveleft)$/.test(clean)) return 'curveL';
   if (/^(curver|right|turnright|turnr|bankright|curveright)$/.test(clean)) return 'curveR';
-  if (/^(hill|camelback|airtime|airtimehill|crest|bunnyhop|hop)$/.test(clean)) return 'hill';
+  if (/^(bunnyhop|hop|speedhill)$/.test(clean)) return 'bunnyHop';
+  if (/^(hill|camelback|airtime|airtimehill|crest)$/.test(clean)) return 'hill';
   if (/^(valley|dip|trough|compression|bottom)$/.test(clean)) return 'valley';
-  if (/^(loop|verticalloop|vertical_loop|inversion|looping)$/.test(clean)) return 'loop';
-  if (/^(zerogroll|zerog|barrelroll|roll|heartline|heartlineroll|inlineroll|inline)$/.test(clean)) return 'zeroGRoll';
+  if (/^(sbend|esses|serpentine)$/.test(clean)) return 'sBend';
+  if (/^(loop|verticalloop|inversion|looping)$/.test(clean)) return 'loop';
+  if (/^(heartline|heartlineroll|inlineroll|inline)$/.test(clean)) return 'heartlineRoll';
+  if (/^(zerogroll|zerog|barrelroll|roll)$/.test(clean)) return 'zeroGRoll';
   if (/^(corkscrew|cork_screw|screw|flatspin)$/.test(clean)) return 'corkscrew';
   if (/^(immelmann|immelman|diveloop|dive_loop|halfloop)$/.test(clean)) return 'immelmann';
   if (/^(jump|airjump|gap)$/.test(clean)) return 'jump';
@@ -100,6 +106,14 @@ function parseJsonLenient(raw: string): any {
   }
 }
 
+function normalizeGravitySetting(value: unknown, fallback: number) {
+  const parsed = typeof value === 'number' ? value : parseFloat(String(value ?? ''));
+  if (!Number.isFinite(parsed)) return fallback;
+  // Accept both Coaster Forge's multiplier format and common SI JSON (9.80665 m/s²).
+  const multiplier = parsed > 3 && parsed < 30 ? parsed / GRAVITY : parsed;
+  return Math.max(0.1, Math.min(3, multiplier));
+}
+
 const SAMPLE_COASTERS = [
   {
     name: 'Giga Hyperion (Airtime Monster)',
@@ -134,9 +148,9 @@ const SAMPLE_COASTERS = [
         settings: {
           friction: 0.006,
           drag: 0.00035,
-          gravity: 9.81,
+          gravity: 1,
           trainMassKg: 5000,
-          gBuffer: 1.8,
+          gForceBuffer: 0,
           material: 'metal',
         },
       },
@@ -386,7 +400,7 @@ export default function ImportExportModal({
           const physSettings: SimSettings = {
             friction: typeof rawPhys.friction === 'number' ? rawPhys.friction : (parseFloat(rawPhys.friction) || settings.friction),
             drag: typeof rawPhys.drag === 'number' ? rawPhys.drag : (parseFloat(rawPhys.drag) || settings.drag),
-            gravity: typeof rawPhys.gravity === 'number' ? rawPhys.gravity : (parseFloat(rawPhys.gravity) || settings.gravity),
+            gravity: normalizeGravitySetting(rawPhys.gravity, settings.gravity),
             liftSpeed: typeof rawPhys.liftSpeed === 'number' ? rawPhys.liftSpeed : (parseFloat(rawPhys.liftSpeed) || settings.liftSpeed),
             launch: typeof rawPhys.launch === 'number' ? rawPhys.launch : (parseFloat(rawPhys.launch) || settings.launch),
             brakeForce: typeof rawPhys.brakeForce === 'number' ? rawPhys.brakeForce : (parseFloat(rawPhys.brakeForce) || settings.brakeForce),
@@ -467,12 +481,12 @@ export default function ImportExportModal({
         finalSettings = {
           friction: parseNum(rawSettingsSource.friction, settings.friction),
           drag: parseNum(rawSettingsSource.drag, settings.drag),
-          gravity: parseNum(rawSettingsSource.gravity, settings.gravity),
+          gravity: normalizeGravitySetting(rawSettingsSource.gravity, settings.gravity),
           liftSpeed: parseNum(rawSettingsSource.liftSpeed, settings.liftSpeed),
           launch: parseNum(rawSettingsSource.launch, settings.launch),
           brakeForce: parseNum(rawSettingsSource.brakeForce, settings.brakeForce),
           boostForce: parseNum(rawSettingsSource.boostForce, settings.boostForce),
-          gForceBuffer: parseNum(rawSettingsSource.gForceBuffer ?? rawSettingsSource.gBuffer, settings.gForceBuffer ?? 0.25),
+          gForceBuffer: parseNum(rawSettingsSource.gForceBuffer ?? rawSettingsSource.gBuffer, settings.gForceBuffer ?? 0),
           material: ['metal', 'wood', 'plastic'].includes(rawSettingsSource.material) ? rawSettingsSource.material : settings.material,
         };
       }
