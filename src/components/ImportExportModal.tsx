@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Download, Upload, Copy, Check, FileCode, AlertCircle, X, Sparkles, Sliders } from 'lucide-react';
-import { GRAVITY, TrackDef, Piece, PieceKind } from '../lib/track';
+import { GRAVITY, TrackDef, Piece, PieceKind, SceneryBlock, newSceneryBlock } from '../lib/track';
 import { SimSettings } from '../lib/physics';
 import { Theme } from '../lib/themes';
 
@@ -453,6 +453,35 @@ export default function ImportExportModal({
         };
       });
 
+      const rawScenery = parsed.track?.scenery ?? parsed.scenery ?? parsed.data?.scenery ?? [];
+      const sanitizedScenery: SceneryBlock[] = Array.isArray(rawScenery)
+        ? rawScenery.flatMap((raw: any) => {
+            const clean = String(raw?.kind ?? raw?.type ?? '').toLowerCase().replace(/[-_\s]/g, '');
+            const kind = clean === 'waterpool' || clean === 'pool'
+              ? 'waterPool'
+              : clean === 'cave' || clean === 'tunnel' || clean === 'rockcave'
+                ? 'cave'
+                : clean === 'waterfall' || clean === 'watercurtain'
+                  ? 'waterfall'
+                  : null;
+            if (!kind) return [];
+            const block = newSceneryBlock(kind, {
+              x: Number.isFinite(Number(raw.x)) ? Number(raw.x) : 0,
+              z: Number.isFinite(Number(raw.z)) ? Number(raw.z) : 0,
+              scale: Math.max(0.35, Math.min(4, Number(raw.scale) || 1)),
+              elevation: Math.max(0, Math.min(3, Number(raw.elevation) || 0)),
+              pieceIndex: kind === 'waterPool' ? undefined : Math.max(0, Math.min(sanitizedPieces.length - 1, Number(raw.pieceIndex) || 0)),
+              lamps: kind === 'cave' ? raw.lamps !== false : undefined,
+              lampColor: kind === 'cave' && typeof raw.lampColor === 'string' ? raw.lampColor : undefined,
+              lampDensity: kind === 'cave' ? Math.max(0.4, Math.min(2, Number(raw.lampDensity) || 1)) : undefined,
+              flow: kind === 'waterfall' ? Math.max(0.2, Math.min(2, Number(raw.flow) || 1)) : undefined,
+              parentId: kind === 'waterfall' && typeof raw.parentId === 'string' ? raw.parentId : undefined,
+            });
+            if (typeof raw.id === 'string') block.id = raw.id;
+            return [block];
+          })
+        : [];
+
       if (sanitizedPieces.length === 0) {
         setImportError('The track file contains no track pieces.');
         return null;
@@ -495,6 +524,7 @@ export default function ImportExportModal({
         origin: { x: originX, y: originY },
         startPitch: typeof targetStartPitch === 'number' ? targetStartPitch : (parseFloat(targetStartPitch) || 0),
         pieces: sanitizedPieces,
+        scenery: sanitizedScenery,
       };
 
       return {

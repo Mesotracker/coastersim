@@ -1,5 +1,5 @@
 import { DEFAULT_SETTINGS, makeSim, precomputeFullRideTelemetry, stepSim } from '../src/lib/physics';
-import { PRESETS, buildTrack } from '../src/lib/track';
+import { PRESETS, buildTrack, defaultTrack } from '../src/lib/track';
 
 function liveRun(frameDt: number) {
   const track = buildTrack(PRESETS[0].build());
@@ -19,6 +19,7 @@ const predicted = precomputeFullRideTelemetry(at30.track, DEFAULT_SETTINGS);
 const speedDrift = Math.abs(at30.state.maxSpeed - at144.state.maxSpeed);
 const timeDrift = Math.abs(at30.state.runTime - at144.state.runTime);
 const predictedSpeedDrift = Math.abs(predicted.maxSpeed - at144.state.maxSpeed);
+const scenicRide = precomputeFullRideTelemetry(buildTrack(defaultTrack()), DEFAULT_SETTINGS);
 
 console.log('Physics invariance audit');
 console.table({
@@ -32,11 +33,15 @@ for (const preset of PRESETS) {
   const result = precomputeFullRideTelemetry(buildTrack(preset.build()), DEFAULT_SETTINGS);
   console.log(`${result.feasibility.status.padEnd(7)} ${preset.name.padEnd(34)} ${result.maxSpeed.toFixed(1).padStart(6)} mph  ${result.totalDuration.toFixed(1).padStart(6)} s`);
 }
+console.log(`\nWater coupling audit · scenic duration ${scenicRide.totalDuration.toFixed(2)} s vs dry ${predicted.totalDuration.toFixed(2)} s · ${scenicRide.feasibility.status}`);
 
 if (at30.state.phase !== 'finished' || at144.state.phase !== 'finished') {
   throw new Error('Reference ride did not complete during live-solver audit.');
 }
 if (speedDrift > 0.08 || timeDrift > 0.08 || predictedSpeedDrift > 0.15) {
   throw new Error(`Solver invariance exceeded tolerance: speed=${speedDrift}, time=${timeDrift}, predicted=${predictedSpeedDrift}`);
+}
+if (scenicRide.feasibility.status === 'error' || scenicRide.totalDuration <= predicted.totalDuration + 0.2) {
+  throw new Error('Waterfall coupling audit failed to produce a safe, measurable speed loss.');
 }
 console.log(`\nPASS · frame-rate drift ${speedDrift.toFixed(4)} mph / ${timeDrift.toFixed(4)} s · prediction drift ${predictedSpeedDrift.toFixed(4)} mph`);

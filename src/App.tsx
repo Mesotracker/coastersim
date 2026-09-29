@@ -17,6 +17,7 @@ import Editor2D from './components/Editor2D';
 import Ride3D, { CamMode, WeatherType, SupportConfig } from './components/Ride3D';
 import Toolbar from './components/Toolbar';
 import Inspector from './components/Inspector';
+import SceneryInspector from './components/SceneryInspector';
 import HUD, { HudData } from './components/HUD';
 import SpeedGraph from './components/SpeedGraph';
 import ImportExportModal from './components/ImportExportModal';
@@ -27,10 +28,13 @@ import {
   PRESETS,
   Piece,
   PieceKind,
+  SceneryBlock,
+  SceneryKind,
   TrackDef,
   buildTrack,
   defaultTrack,
   newPiece,
+  newSceneryBlock,
 } from './lib/track';
 import {
   DEFAULT_SETTINGS,
@@ -44,7 +48,7 @@ import {
 import { THEMES, Theme } from './lib/themes';
 import { audioEngine } from './lib/audio';
 
-type Tab = 'piece' | 'physics' | 'telemetry' | 'style';
+type Tab = 'piece' | 'scenery' | 'physics' | 'telemetry' | 'style';
 type LayoutMode = 'balanced' | 'wide-ride' | 'focus-designer';
 type MobileTab = 'ride' | 'editor' | 'tuning';
 
@@ -104,6 +108,7 @@ function MiniSlider({
 export default function App() {
   const [track, setTrack] = useState<TrackDef>(() => defaultTrack());
   const [selected, setSelected] = useState<number | null>(null);
+  const [selectedSceneryId, setSelectedSceneryId] = useState<string | null>(null);
   const [playing, setPlaying] = useState(true);
   const [settings, setSettings] = useState<SimSettings>(DEFAULT_SETTINGS);
   const [theme, setTheme] = useState<Theme>(THEMES[0]);
@@ -172,6 +177,10 @@ export default function App() {
   );
 
   const built = useMemo(() => buildTrack(track), [track]);
+  const selectedScenery = useMemo(
+    () => track.scenery?.find((block) => block.id === selectedSceneryId) ?? null,
+    [track.scenery, selectedSceneryId],
+  );
 
   // Precompute entire ride speed profile and full telemetry ahead of time
   const precomputedRide = useMemo(
@@ -309,8 +318,14 @@ export default function App() {
         const i = Math.max(0, Math.min(pieces.length, index));
         pieces.splice(i, 0, newPiece(kind));
         setSelected(i);
+        setSelectedSceneryId(null);
         setTab('piece');
-        return { ...prev, pieces };
+        const scenery = (prev.scenery ?? []).map((block) =>
+          block.pieceIndex != null && block.pieceIndex >= i
+            ? { ...block, pieceIndex: block.pieceIndex + 1 }
+            : block,
+        );
+        return { ...prev, pieces, scenery };
       });
     },
     [pushHistory],
@@ -323,6 +338,70 @@ export default function App() {
     },
     [insertPiece, selected, track.pieces.length],
   );
+
+  const addScenery = useCallback(
+    (kind: SceneryKind) => {
+      const pieceIndex = selected ?? Math.max(0, track.pieces.length - 1);
+      const range = built.pieceRanges[pieceIndex];
+      const sample = range
+        ? built.samples[Math.floor((range.start + range.end) / 2)]
+        : built.samples[Math.floor(built.samples.length / 2)];
+      const tx = sample ? built.tan[Math.floor((range ? (range.start + range.end) / 2 : built.samples.length / 2)) * 3] : 1;
+      const tz = sample ? built.tan[Math.floor((range ? (range.start + range.end) / 2 : built.samples.length / 2)) * 3 + 2] : 0;
+      const sideX = -tz;
+      const sideZ = tx;
+      const samePieceCave = track.scenery?.find((block) => block.kind === 'cave' && block.pieceIndex === pieceIndex);
+      const block = newSceneryBlock(kind, {
+        x: (sample?.px ?? built.center3.x) + (kind === 'waterPool' ? sideX * 52 : 0),
+        z: (sample?.pz ?? built.center3.z) + (kind === 'waterPool' ? sideZ * 52 : 0),
+        ...(kind !== 'waterPool' ? { pieceIndex } : {}),
+        ...(kind === 'waterfall' && samePieceCave ? { parentId: samePieceCave.id } : {}),
+      });
+      setTrack((prev) => {
+        pushHistory(prev);
+        return { ...prev, scenery: [...(prev.scenery ?? []), block] };
+      });
+      setSelectedSceneryId(block.id);
+      setSelected(null);
+      setTab('scenery');
+      showToast(`${kind === 'waterPool' ? 'Water pool' : kind === 'cave' ? 'Rock cave' : 'Waterfall'} added`);
+    },
+    [built, pushHistory, selected, showToast, track.pieces.length, track.scenery],
+  );
+
+  const updateScenery = useCallback((id: string, patch: Partial<SceneryBlock>) => {
+    setTrack((prev) => ({
+      ...prev,
+      scenery: (prev.scenery ?? []).map((block) => block.id === id ? { ...block, ...patch } : block),
+    }));
+  }, []);
+
+  const deleteScenery = useCallback((id: string) => {
+    setTrack((prev) => {
+      pushHistory(prev);
+      return { ...prev, scenery: (prev.scenery ?? []).filter((block) => block.id !== id && block.parentId !== id) };
+    });
+    setSelectedSceneryId(null);
+    showToast('Environment block removed');
+  }, [pushHistory, showToast]);
+
+  const duplicateScenery = useCallback((id: string) => {
+    setTrack((prev) => {
+      const source = prev.scenery?.find((block) => block.id === id);
+      if (!source) return prev;
+      pushHistory(prev);
+      const { id: _sourceId, ...sourceData } = source;
+      const copy = newSceneryBlock(source.kind, {
+        ...sourceData,
+        x: source.x + 24,
+        z: source.z + 18,
+        parentId: source.kind === 'waterfall' ? source.parentId : undefined,
+      });
+      setSelectedSceneryId(copy.id);
+      return { ...prev, scenery: [...(prev.scenery ?? []), copy] };
+    });
+    setTab('scenery');
+  }, [pushHistory]);
 
   const updatePiece = useCallback(
     (index: number, patch: Partial<Piece>) => {
@@ -343,8 +422,19 @@ export default function App() {
         pushHistory(prev);
         const pieces = prev.pieces.slice();
         pieces.splice(index, 1);
-        return { ...prev, pieces };
+        const removedIds = new Set(
+          (prev.scenery ?? [])
+            .filter((block) => block.pieceIndex === index)
+            .map((block) => block.id),
+        );
+        const scenery = (prev.scenery ?? [])
+          .filter((block) => block.pieceIndex !== index && !removedIds.has(block.parentId ?? ''))
+          .map((block) => block.pieceIndex != null && block.pieceIndex > index
+            ? { ...block, pieceIndex: block.pieceIndex - 1 }
+            : block);
+        return { ...prev, pieces, scenery };
       });
+      setSelectedSceneryId(null);
       setSelected((s) => (s == null ? null : Math.max(0, Math.min(s, track.pieces.length - 2))));
     },
     [pushHistory, track.pieces.length],
@@ -375,7 +465,12 @@ export default function App() {
         const tmp = pieces[index];
         pieces[index] = pieces[j];
         pieces[j] = tmp;
-        return { ...prev, pieces };
+        const scenery = (prev.scenery ?? []).map((block) => {
+          if (block.pieceIndex === index) return { ...block, pieceIndex: j };
+          if (block.pieceIndex === j) return { ...block, pieceIndex: index };
+          return block;
+        });
+        return { ...prev, pieces, scenery };
       });
       setSelected(index + dir);
     },
@@ -392,6 +487,7 @@ export default function App() {
         if (found) setTheme(found);
       }
       setSelected(null);
+      setSelectedSceneryId(null);
       resetSim(simRef.current);
       setFitSignal((f) => f + 1);
       showToast(`Loaded preset: ${p.name}`);
@@ -402,9 +498,10 @@ export default function App() {
   const clearTrack = useCallback(() => {
     setTrack((prev) => {
       pushHistory(prev);
-      return { ...prev, pieces: [] };
+      return { ...prev, pieces: [], scenery: [] };
     });
     setSelected(null);
+    setSelectedSceneryId(null);
     resetSim(simRef.current);
     showToast('Circuit cleared');
   }, [pushHistory, showToast]);
@@ -415,6 +512,7 @@ export default function App() {
     if (prev) {
       setTrack(prev);
       setSelected(null);
+      setSelectedSceneryId(null);
       showToast('Action undone');
     }
   }, [showToast]);
@@ -442,6 +540,7 @@ export default function App() {
       if (data.settings) setSettings(data.settings);
       if (data.theme) setTheme(data.theme);
       setSelected(null);
+      setSelectedSceneryId(null);
       resetSim(simRef.current);
       setFitSignal((f) => f + 1);
       showToast(`Successfully imported: ${data.name || 'Custom Coaster'}`);
@@ -483,9 +582,13 @@ export default function App() {
           e.preventDefault();
           deletePiece(selected);
           setSelected(null);
+        } else if (selectedSceneryId) {
+          e.preventDefault();
+          deleteScenery(selectedSceneryId);
         }
       } else if (e.key === 'Escape') {
         setSelected(null);
+        setSelectedSceneryId(null);
       } else if (e.key.toLowerCase() === 'f') {
         setFitSignal((f) => f + 1);
       } else if (e.key.toLowerCase() === 'r') {
@@ -517,7 +620,7 @@ export default function App() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [deletePiece, restart, selected, showToast, track.pieces, undo, updatePiece]);
+  }, [deletePiece, deleteScenery, restart, selected, selectedSceneryId, showToast, track.pieces, undo, updatePiece]);
 
   // Global drag-and-drop support for coaster .json files
   useEffect(() => {
@@ -605,8 +708,8 @@ export default function App() {
         </div>
 
         {/* Imperial Summary Metrics Bar */}
-        <div className="hidden items-center gap-4 rounded-xl border border-slate-200 bg-slate-50/80 px-4 py-2 lg:flex">
-          <Metric label="Pieces" value={`${track.pieces.length}`} />
+        <div className="premium-metrics hidden items-center gap-4 rounded-xl border border-slate-200 bg-slate-50/80 px-4 py-2 lg:flex">
+          <Metric label="Blocks" value={`${track.pieces.length + (track.scenery?.length ?? 0)}`} />
           <div className="h-5 w-px bg-slate-200" />
           <Metric label="Map" value={`${mapWidthMi.toFixed(1)} mi`} />
           <div className="h-5 w-px bg-slate-200" />
@@ -648,7 +751,7 @@ export default function App() {
           </div>
 
           {/* Material Quick Selector */}
-          <div className="hidden md:flex items-center gap-1 rounded-xl border border-slate-200 bg-white p-0.5 shadow-xs">
+          <div className="premium-material hidden md:flex items-center gap-1 rounded-xl border border-slate-200 bg-white p-0.5 shadow-xs">
             <span className="px-2 text-[11px] font-bold uppercase tracking-wider text-slate-400">Material</span>
             {(['metal', 'wood', 'plastic'] as const).map((m) => (
               <button
@@ -864,7 +967,7 @@ export default function App() {
                   <h2 className="text-xs font-bold uppercase tracking-wider text-slate-600">
                     Track Elements
                   </h2>
-                  <span className="text-[11px] text-slate-400">20 precision presets · click or drag to canvas</span>
+                  <span className="text-[11px] text-slate-400">20 track pieces + 3 environment blocks · drag to place</span>
                 </div>
                 <label className="flex cursor-pointer items-center gap-2 text-xs font-bold text-slate-600">
                   <input
@@ -876,33 +979,46 @@ export default function App() {
                   <span>Snap angles</span>
                 </label>
               </div>
-              <Toolbar onAdd={addPiece} />
+              <Toolbar onAdd={addPiece} onAddScenery={addScenery} />
             </div>
 
             {/* 2D Canvas Editor */}
-            <div className={`min-h-[260px] flex-1 overflow-hidden ${mobileTab === 'tuning' ? 'hidden lg:block' : 'block'}`}>
+            <div className={`min-h-[160px] flex-1 overflow-hidden ${mobileTab === 'tuning' ? 'hidden lg:block' : 'block'}`}>
               <Editor2D
                 track={track}
                 built={built}
                 simRef={simRef}
                 theme={theme}
                 selected={selected}
+                selectedSceneryId={selectedSceneryId}
                 snap={snap}
                 onSelect={(i) => {
                   setSelected(i);
-                  if (i != null) setTab('piece');
+                  if (i != null) {
+                    setSelectedSceneryId(null);
+                    setTab('piece');
+                  }
                 }}
+                onSelectScenery={(id) => {
+                  setSelectedSceneryId(id);
+                  if (id) {
+                    setSelected(null);
+                    setTab('scenery');
+                  }
+                }}
+                onUpdateScenery={updateScenery}
                 onHoverPiece={setHoveredPiece}
                 onChange={handleChange}
                 onInsert={insertPiece}
+                onAddScenery={addScenery}
                 fitSignal={fitSignal}
               />
             </div>
 
             {/* Bottom tabbed workbench */}
-            <div className={`rounded-2xl border border-slate-200 bg-white p-3 shadow-xs ${mobileTab === 'editor' ? 'hidden lg:block' : 'block flex-1 lg:flex-none overflow-y-auto'}`}>
+            <div className={`min-h-[190px] shrink-0 overflow-y-auto lg:max-h-[32vh] rounded-2xl border border-slate-200 bg-white p-3 shadow-xs ${mobileTab === 'editor' ? 'hidden lg:block' : 'block flex-1 lg:flex-none'}`}>
               <div className="mb-3 flex gap-1 rounded-xl bg-slate-100 p-1">
-                {(['piece', 'physics', 'telemetry', 'style'] as Tab[]).map((t) => (
+                {(['piece', 'scenery', 'physics', 'telemetry', 'style'] as Tab[]).map((t) => (
                   <button
                     key={t}
                     onClick={() => setTab(t)}
@@ -912,7 +1028,7 @@ export default function App() {
                         : 'text-slate-500 hover:text-slate-800'
                     }`}
                   >
-                    {t === 'telemetry' ? 'Speed Graph' : t === 'piece' ? 'Piece Tuning' : t}
+                    {t === 'telemetry' ? 'Graph' : t === 'piece' ? 'Track' : t === 'scenery' ? 'Environment' : t}
                   </button>
                 ))}
               </div>
@@ -927,6 +1043,16 @@ export default function App() {
                   onDuplicate={duplicatePiece}
                   onMove={movePiece}
                   onSelect={setSelected}
+                />
+              )}
+
+              {tab === 'scenery' && (
+                <SceneryInspector
+                  block={selectedScenery}
+                  built={built}
+                  onUpdate={updateScenery}
+                  onDelete={deleteScenery}
+                  onDuplicate={duplicateScenery}
                 />
               )}
 
@@ -1262,6 +1388,7 @@ export default function App() {
               telemetry={precomputedRide.telemetry}
               onSelectPiece={(index) => {
                 setSelected(index);
+                setSelectedSceneryId(null);
                 setTab('piece');
               }}
             />
@@ -1287,6 +1414,7 @@ export default function App() {
               feasibility={precomputedRide.feasibility}
               onSelectPiece={(idx) => {
                 setSelected(idx);
+                setSelectedSceneryId(null);
                 setTab('piece');
               }}
             />

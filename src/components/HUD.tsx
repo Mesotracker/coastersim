@@ -332,7 +332,7 @@ export default function HUD({
 
       {/* Top-right Camera modes, Weather, Audio Synth & Tools */}
       <div className="pointer-events-auto absolute right-2.5 top-2.5 sm:right-3 sm:top-3 flex flex-col items-end gap-1.5 sm:gap-2 z-10">
-        <div className="flex items-center gap-1.5">
+        <div className="flex max-w-[72vw] flex-wrap items-center justify-end gap-1.5">
           {/* Dynamic Audio Synthesizer Control */}
           <div className="relative flex items-center">
             <button

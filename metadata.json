@@ -1,6 +1,6 @@
 {
   "name": "Coaster Forge Platinum",
-  "description": "A standalone rollercoaster design studio with deterministic 240 Hz SI physics, expanded procedural park rendering, raycast inspection, detailed textures, atmospheric fog, and cinematic playback.",
+  "description": "A standalone rollercoaster studio with deterministic 240 Hz SI physics, detailed polygon scenery, draggable ground-clipped pools, lamp-lit cave tunnels, physical waterfalls and ballistic spray, raycast inspection, atmospheric fog, and cinematic playback.",
   "requestFramePermissions": [],
-  "majorCapabilities": ["3D_TRACK_DESIGN", "REALTIME_PHYSICS", "OFFLINE_SINGLE_FILE"]
+  "majorCapabilities": ["3D_TRACK_DESIGN", "ENVIRONMENT_BUILDING", "WATER_PHYSICS", "REALTIME_PHYSICS", "OFFLINE_SINGLE_FILE"]
 }

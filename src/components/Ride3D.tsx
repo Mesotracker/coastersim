@@ -59,6 +59,29 @@ function getGColor(g: number, outColor: THREE.Color): THREE.Color {
   }
 }
 
+interface WaterEffect {
+  pieceIndex: number;
+  origin: THREE.Vector3;
+  bottomY: number;
+  width: number;
+  height: number;
+  flow: number;
+  fall: THREE.Points;
+  fallPositions: Float32Array;
+  fallSeeds: Float32Array;
+  spray: THREE.Points;
+  sprayPositions: Float32Array;
+  sprayVelocities: Float32Array;
+  sprayLife: Float32Array;
+  spawnCursor: number;
+}
+
+interface WaterSurface {
+  mesh: THREE.Mesh;
+  ripples: THREE.Mesh[];
+  phase: number;
+}
+
 class PointsCurve extends THREE.Curve<THREE.Vector3> {
   pts: THREE.Vector3[];
   constructor(pts: THREE.Vector3[]) {
@@ -217,6 +240,8 @@ export default function Ride3D({
     surveyMarker: THREE.Group;
     surveyLabel: HTMLDivElement;
     hoveredPiece: number | null;
+    waterEffects: WaterEffect[];
+    waterSurfaces: WaterSurface[];
     sun: THREE.DirectionalLight;
     hemi: THREE.HemisphereLight;
     fillLight: THREE.DirectionalLight;
@@ -696,6 +721,8 @@ export default function Ride3D({
       surveyMarker,
       surveyLabel,
       hoveredPiece: null,
+      waterEffects: [],
+      waterSurfaces: [],
       sun,
       hemi,
       fillLight,
@@ -952,6 +979,8 @@ export default function Ride3D({
         g.clear();
       };
       st.raycastTargets.length = 0;
+      st.waterEffects.length = 0;
+      st.waterSurfaces.length = 0;
       st.surveyMarker.visible = false;
       st.surveyLabel.style.display = 'none';
       dispose(st.trackGroup);
@@ -1727,6 +1756,251 @@ export default function Ride3D({
       platGroup.add(roof);
       st.trackGroup.add(platGroup);
 
+      // =====================================================================
+      // ENVIRONMENT BUILDING BLOCKS: pools, rock caves, lamps and waterfalls
+      // =====================================================================
+      const waterMaterial = () => new THREE.MeshPhysicalMaterial({
+        color: 0x1597c4,
+        roughness: 0.08,
+        metalness: 0.02,
+        transmission: 0.34,
+        thickness: 1.8,
+        transparent: true,
+        opacity: 0.76,
+        clearcoat: 1,
+        clearcoatRoughness: 0.08,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+      });
+      const shoreMat = new THREE.MeshStandardMaterial({ color: 0x6f756f, roughness: 0.95, metalness: 0.02 });
+      const caveMat = new THREE.MeshStandardMaterial({ color: 0x57534e, roughness: 0.93, metalness: 0.03, flatShading: true });
+      const caveDarkMat = new THREE.MeshStandardMaterial({ color: 0x292524, roughness: 0.98, metalness: 0.01, side: THREE.DoubleSide });
+      const waterRnd = mulberry(8841);
+      let caveLightBudget = 10;
+
+      for (const block of built.scenery) {
+        if (block.kind === 'waterPool') {
+          const radius = 25 * Math.max(0.45, block.scale);
+          const waterY = G + Math.max(0.05, block.elevation);
+          const pool = new THREE.Mesh(new THREE.CircleGeometry(1, 72), waterMaterial());
+          pool.rotation.x = -Math.PI / 2;
+          pool.scale.set(radius, radius * 0.68, 1);
+          pool.position.set(block.x, waterY, block.z);
+          pool.receiveShadow = true;
+          pool.renderOrder = 2;
+          st.sceneryGroup.add(pool);
+
+          const bank = new THREE.Mesh(new THREE.RingGeometry(1, 1.12, 72), shoreMat);
+          bank.rotation.x = -Math.PI / 2;
+          bank.scale.set(radius, radius * 0.68, 1);
+          bank.position.set(block.x, waterY - 0.12, block.z);
+          bank.receiveShadow = true;
+          st.sceneryGroup.add(bank);
+
+          // Polygonal shoreline stones prevent the pool from reading as a flat decal.
+          const stoneCount = 42;
+          const stones = new THREE.InstancedMesh(new THREE.DodecahedronGeometry(1, 1), shoreMat, stoneCount);
+          stones.castShadow = true;
+          for (let i = 0; i < stoneCount; i++) {
+            const angle = (i / stoneCount) * Math.PI * 2 + (waterRnd() - 0.5) * 0.12;
+            const rr = radius * (1.03 + waterRnd() * 0.08);
+            const sc = 0.8 + waterRnd() * 1.5;
+            m4.compose(
+              new THREE.Vector3(block.x + Math.cos(angle) * rr, G + sc * 0.35, block.z + Math.sin(angle) * rr * 0.68),
+              new THREE.Quaternion().setFromEuler(new THREE.Euler(waterRnd() * 0.3, waterRnd() * Math.PI, waterRnd() * 0.3)),
+              new THREE.Vector3(sc * 1.35, sc * 0.72, sc),
+            );
+            stones.setMatrixAt(i, m4);
+          }
+          stones.instanceMatrix.needsUpdate = true;
+          st.sceneryGroup.add(stones);
+
+          const ripples: THREE.Mesh[] = [];
+          for (let i = 0; i < 3; i++) {
+            const ripple = new THREE.Mesh(
+              new THREE.RingGeometry(0.88, 1, 48),
+              new THREE.MeshBasicMaterial({ color: 0xb9edff, transparent: true, opacity: 0.22, depthWrite: false, side: THREE.DoubleSide }),
+            );
+            ripple.rotation.x = -Math.PI / 2;
+            ripple.position.set(block.x, waterY + 0.1 + i * 0.015, block.z);
+            ripple.scale.setScalar(radius * (0.08 + i * 0.13));
+            ripple.userData.baseScale = ripple.scale.x;
+            ripple.userData.phase = i * 0.33;
+            ripple.renderOrder = 3;
+            st.sceneryGroup.add(ripple);
+            ripples.push(ripple);
+          }
+          st.waterSurfaces.push({ mesh: pool, ripples, phase: waterRnd() * Math.PI * 2 });
+          continue;
+        }
+
+        const pieceIndex = Math.max(0, Math.min(built.pieceRanges.length - 1, block.pieceIndex ?? 0));
+        const range = built.pieceRanges[pieceIndex];
+        if (!range) continue;
+
+        if (block.kind === 'cave') {
+          const radius = 9.5 * Math.max(0.55, block.scale);
+          const sampleStep = Math.max(5, Math.floor((range.end - range.start) / 20));
+          const ringIndices: number[] = [];
+          for (let index = range.start; index <= range.end; index += sampleStep) ringIndices.push(index);
+          if (ringIndices[ringIndices.length - 1] !== range.end) ringIndices.push(range.end);
+          const rocksPerRing = 11;
+          const rocks = new THREE.InstancedMesh(
+            new THREE.DodecahedronGeometry(1, 1),
+            caveMat,
+            Math.max(1, ringIndices.length * rocksPerRing),
+          );
+          rocks.castShadow = true;
+          rocks.receiveShadow = true;
+          let rockIndex = 0;
+          const caveRnd = mulberry(5000 + pieceIndex * 97 + block.id.length);
+          for (const index of ringIndices) {
+            const sm = S[index];
+            const normal = nbArr[index];
+            const rightVec = rbArr[index];
+            for (let r = 0; r < rocksPerRing; r++) {
+              const angle = (r / rocksPerRing) * Math.PI * 2;
+              const radial = radius * (0.92 + caveRnd() * 0.15);
+              const position = new THREE.Vector3(sm.px, sm.py, sm.pz)
+                .addScaledVector(rightVec, Math.cos(angle) * radial)
+                .addScaledVector(normal, Math.sin(angle) * radial);
+              const rs = radius * (0.24 + caveRnd() * 0.085);
+              m4.compose(
+                position,
+                new THREE.Quaternion().setFromEuler(new THREE.Euler(caveRnd() * Math.PI, caveRnd() * Math.PI, caveRnd() * Math.PI)),
+                new THREE.Vector3(rs * (0.85 + caveRnd() * 0.4), rs * (0.8 + caveRnd() * 0.35), rs * (1.05 + caveRnd() * 0.45)),
+              );
+              rocks.setMatrixAt(rockIndex++, m4);
+            }
+          }
+          rocks.count = rockIndex;
+          rocks.instanceMatrix.needsUpdate = true;
+          st.sceneryGroup.add(rocks);
+
+          // Dark inner liner gives depth even where the polygon shell has small gaps.
+          const tunnelPoints = ringIndices.map((index) => new THREE.Vector3(S[index].px, S[index].py, S[index].pz));
+          if (tunnelPoints.length > 2) {
+            const liner = new THREE.Mesh(
+              new THREE.TubeGeometry(new PointsCurve(tunnelPoints), Math.max(10, tunnelPoints.length * 2), radius * 0.86, 16, false),
+              caveDarkMat,
+            );
+            st.sceneryGroup.add(liner);
+          }
+
+          if (block.lamps !== false) {
+            const spacing = Math.max(1, Math.round(3 / Math.max(0.4, block.lampDensity ?? 1)));
+            const lampIndices = ringIndices.filter((_, index) => index % spacing === 1);
+            const lampColor = new THREE.Color(block.lampColor ?? '#f2c14e');
+            const lampMaterial = new THREE.MeshStandardMaterial({ color: lampColor, emissive: lampColor, emissiveIntensity: 3.2, roughness: 0.15 });
+            const lamps = new THREE.InstancedMesh(new THREE.SphereGeometry(0.62, 16, 12), lampMaterial, Math.max(1, lampIndices.length * 2));
+            let lampIndex = 0;
+            for (const index of lampIndices) {
+              const sm = S[index];
+              const normal = nbArr[index];
+              const rightVec = rbArr[index];
+              for (const side of [-1, 1]) {
+                const position = new THREE.Vector3(sm.px, sm.py, sm.pz)
+                  .addScaledVector(normal, radius * 0.55)
+                  .addScaledVector(rightVec, side * radius * 0.55);
+                m4.compose(position, new THREE.Quaternion(), new THREE.Vector3(1, 1, 1));
+                lamps.setMatrixAt(lampIndex++, m4);
+                if (caveLightBudget > 0) {
+                  const light = new THREE.PointLight(lampColor, 1.4, radius * 5, 2);
+                  light.position.copy(position);
+                  st.sceneryGroup.add(light);
+                  caveLightBudget--;
+                }
+              }
+            }
+            lamps.count = lampIndex;
+            lamps.instanceMatrix.needsUpdate = true;
+            st.sceneryGroup.add(lamps);
+          }
+          continue;
+        }
+
+        // Waterfall curtain: layered below a cave when parentId is set.
+        const middle = Math.floor((range.start + range.end) / 2);
+        const sm = S[middle];
+        const tangent = new THREE.Vector3(built.tan[middle * 3], built.tan[middle * 3 + 1], built.tan[middle * 3 + 2]).normalize();
+        const rightVec = rbArr[middle].clone().normalize();
+        const parentCave = built.scenery.find((item) => item.id === block.parentId && item.kind === 'cave');
+        const flow = Math.max(0.2, Math.min(2, block.flow ?? 1));
+        const width = 14 * Math.max(0.55, block.scale);
+        const height = 18 * Math.max(0.75, parentCave?.scale ?? block.scale);
+        const bottomY = sm.py - 4.5;
+        const topY = bottomY + height;
+        const waterfallMat = waterMaterial();
+        waterfallMat.opacity = 0.58;
+        waterfallMat.emissive = new THREE.Color(0x0c4a6e);
+        waterfallMat.emissiveIntensity = 0.18;
+        const curtain = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 0.45), waterfallMat);
+        const horizontalForward = new THREE.Vector3().crossVectors(rightVec, new THREE.Vector3(0, 1, 0)).normalize();
+        const curtainBasis = new THREE.Matrix4().makeBasis(rightVec, new THREE.Vector3(0, 1, 0), horizontalForward.lengthSq() > 0.5 ? horizontalForward : tangent);
+        curtain.quaternion.setFromRotationMatrix(curtainBasis);
+        curtain.position.set(sm.px, (topY + bottomY) / 2, sm.pz);
+        curtain.scale.set(width, height, 1);
+        curtain.renderOrder = 2;
+        st.sceneryGroup.add(curtain);
+
+        const basin = new THREE.Mesh(new THREE.CircleGeometry(width * 0.72, 48), waterMaterial());
+        basin.rotation.x = -Math.PI / 2;
+        basin.scale.set(1, 0.42, 1);
+        basin.position.set(sm.px, bottomY + 0.12, sm.pz);
+        basin.renderOrder = 2;
+        st.sceneryGroup.add(basin);
+
+        const fallCount = Math.round(170 * flow);
+        const fallPositions = new Float32Array(fallCount * 3);
+        const fallSeeds = new Float32Array(fallCount * 3);
+        for (let i = 0; i < fallCount; i++) {
+          const side = (waterRnd() - 0.5) * width;
+          const yFrac = waterRnd();
+          const forward = (waterRnd() - 0.5) * 2.2;
+          fallPositions[i * 3] = sm.px + rightVec.x * side + tangent.x * forward;
+          fallPositions[i * 3 + 1] = bottomY + yFrac * height;
+          fallPositions[i * 3 + 2] = sm.pz + rightVec.z * side + tangent.z * forward;
+          fallSeeds[i * 3] = side;
+          fallSeeds[i * 3 + 1] = yFrac;
+          fallSeeds[i * 3 + 2] = forward;
+        }
+        const fallGeo = new THREE.BufferGeometry();
+        fallGeo.setAttribute('position', new THREE.BufferAttribute(fallPositions, 3));
+        const fall = new THREE.Points(fallGeo, new THREE.PointsMaterial({ color: 0xc7efff, size: 0.85 + flow * 0.35, transparent: true, opacity: 0.76, depthWrite: false }));
+        st.sceneryGroup.add(fall);
+
+        const sprayCount = Math.round(150 * flow);
+        const sprayPositions = new Float32Array(sprayCount * 3);
+        const sprayVelocities = new Float32Array(sprayCount * 3);
+        const sprayLife = new Float32Array(sprayCount);
+        for (let i = 0; i < sprayCount; i++) {
+          sprayPositions[i * 3] = sm.px;
+          sprayPositions[i * 3 + 1] = bottomY;
+          sprayPositions[i * 3 + 2] = sm.pz;
+        }
+        const sprayGeo = new THREE.BufferGeometry();
+        sprayGeo.setAttribute('position', new THREE.BufferAttribute(sprayPositions, 3));
+        const spray = new THREE.Points(sprayGeo, new THREE.PointsMaterial({ color: 0xe0f7ff, size: 1.25, transparent: true, opacity: 0.84, depthWrite: false, sizeAttenuation: true }));
+        spray.visible = false;
+        st.sceneryGroup.add(spray);
+        st.waterEffects.push({
+          pieceIndex,
+          origin: new THREE.Vector3(sm.px, bottomY + 1.2, sm.pz),
+          bottomY,
+          width,
+          height,
+          flow,
+          fall,
+          fallPositions,
+          fallSeeds,
+          spray,
+          sprayPositions,
+          sprayVelocities,
+          sprayLife,
+          spawnCursor: 0,
+        });
+      }
+
       // Scenery with PBR Standard Materials
       const rnd = mulberry(1337);
       const coarse: THREE.Vector2[] = [];
@@ -1737,6 +2011,13 @@ export default function Ride3D({
           const dz = c.y - z;
           if (dx * dx + dz * dz < d * d) return true;
         }
+        for (const block of built.scenery) {
+          if (block.kind !== 'waterPool') continue;
+          const clearance = 25 * block.scale + d;
+          const dx = block.x - x;
+          const dz = block.z - z;
+          if (dx * dx + dz * dz < clearance * clearance) return true;
+        }
         return false;
       };
 
@@ -1744,14 +2025,20 @@ export default function Ride3D({
       const cz = built.center3.z;
       const spread = Math.min(worldSize * 0.72, built.radius3 * 5 + 1800);
 
-      const trunkGeo = new THREE.CylinderGeometry(1.1, 1.5, 7, 8);
-      const leafGeo = new THREE.ConeGeometry(6.5, 20, 6);
-      const trunkMat = new THREE.MeshStandardMaterial({ color: 0x6e4a2e, roughness: 0.90, metalness: 0.05 });
-      const leafMat = new THREE.MeshStandardMaterial({ color: 0x2e7d32, roughness: 0.65, metalness: 0.02 });
+      const trunkGeo = new THREE.CylinderGeometry(1.05, 1.55, 9, 12, 3);
+      const leafGeo = new THREE.IcosahedronGeometry(1, 1);
+      const trunkMat = new THREE.MeshStandardMaterial({ color: 0x68452a, roughness: 0.93, metalness: 0.02, flatShading: true });
+      const leafMatLow = new THREE.MeshStandardMaterial({ color: 0x245c2c, roughness: 0.78, metalness: 0.01, flatShading: true });
+      const leafMatMid = new THREE.MeshStandardMaterial({ color: 0x347a36, roughness: 0.72, metalness: 0.01, flatShading: true });
+      const leafMatTop = new THREE.MeshStandardMaterial({ color: 0x4b9441, roughness: 0.68, metalness: 0.01, flatShading: true });
       const COUNT = Math.max(240, Math.min(560, Math.floor(220 + built.radius3 * 0.22)));
       const trunks = new THREE.InstancedMesh(trunkGeo, trunkMat, COUNT);
-      const leaves = new THREE.InstancedMesh(leafGeo, leafMat, COUNT);
-      leaves.castShadow = true;
+      const leavesLow = new THREE.InstancedMesh(leafGeo, leafMatLow, COUNT);
+      const leavesMid = new THREE.InstancedMesh(leafGeo, leafMatMid, COUNT);
+      const leavesTop = new THREE.InstancedMesh(leafGeo, leafMatTop, COUNT);
+      leavesLow.castShadow = true;
+      leavesMid.castShadow = true;
+      leavesTop.castShadow = true;
       let k = 0;
       let guard = 0;
       while (k < COUNT && guard < COUNT * 20) {
@@ -1760,17 +2047,23 @@ export default function Ride3D({
         const z = cz + (rnd() - 0.5) * spread;
         if (near(x, z, 34)) continue;
         const sc = 0.7 + rnd() * 1.1;
-        m4.compose(new THREE.Vector3(x, G + 3.5 * sc, z), new THREE.Quaternion(), new THREE.Vector3(sc, sc, sc));
+        const treeYaw = rnd() * Math.PI;
+        const treeQ = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, treeYaw, 0));
+        m4.compose(new THREE.Vector3(x, G + 4.5 * sc, z), treeQ, new THREE.Vector3(sc, sc, sc));
         trunks.setMatrixAt(k, m4);
-        m4.compose(new THREE.Vector3(x, G + 16 * sc, z), new THREE.Quaternion(), new THREE.Vector3(sc, sc, sc));
-        leaves.setMatrixAt(k, m4);
+        m4.compose(new THREE.Vector3(x - 1.2 * sc, G + 12.5 * sc, z + 0.6 * sc), treeQ, new THREE.Vector3(6.8 * sc, 5.6 * sc, 6.3 * sc));
+        leavesLow.setMatrixAt(k, m4);
+        m4.compose(new THREE.Vector3(x + 1.0 * sc, G + 18.2 * sc, z - 0.5 * sc), treeQ, new THREE.Vector3(5.7 * sc, 5.2 * sc, 5.8 * sc));
+        leavesMid.setMatrixAt(k, m4);
+        m4.compose(new THREE.Vector3(x, G + 23.1 * sc, z), treeQ, new THREE.Vector3(4.3 * sc, 4.7 * sc, 4.4 * sc));
+        leavesTop.setMatrixAt(k, m4);
         k++;
       }
-      trunks.count = k;
-      leaves.count = k;
-      trunks.instanceMatrix.needsUpdate = true;
-      leaves.instanceMatrix.needsUpdate = true;
-      st.sceneryGroup.add(trunks, leaves);
+      for (const mesh of [trunks, leavesLow, leavesMid, leavesTop]) {
+        mesh.count = k;
+        mesh.instanceMatrix.needsUpdate = true;
+      }
+      st.sceneryGroup.add(trunks, leavesLow, leavesMid, leavesTop);
 
       // Layered understory, stones and maintenance-road markers add scale cues at POV speed.
       const detailCount = Math.min(360, Math.floor(COUNT * 0.72));
@@ -1856,27 +2149,44 @@ export default function Ride3D({
       hills.instanceMatrix.needsUpdate = true;
       st.sceneryGroup.add(hills);
 
-      // Clouds
+      // Multi-lobed polygon clouds use subdivided icosahedra instead of single low-poly blobs.
       const cloudMat = new THREE.MeshStandardMaterial({
-        color: 0xffffff,
-        roughness: 0.95,
-        emissive: 0xb0cce8,
-        emissiveIntensity: 0.28,
+        color: 0xf8fbff,
+        roughness: 0.96,
+        emissive: 0xb9d3ec,
+        emissiveIntensity: 0.24,
+        flatShading: true,
       });
-      const clouds = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(1, 0), cloudMat, 42);
-      for (let i = 0; i < 42; i++) {
+      const cloudShadeMat = new THREE.MeshStandardMaterial({
+        color: 0xdce8f2,
+        roughness: 0.98,
+        emissive: 0x7693ad,
+        emissiveIntensity: 0.16,
+        flatShading: true,
+      });
+      const cloudGeo = new THREE.IcosahedronGeometry(1, 1);
+      const cloudCount = 44;
+      const cloudCore = new THREE.InstancedMesh(cloudGeo, cloudMat, cloudCount);
+      const cloudLeft = new THREE.InstancedMesh(cloudGeo, cloudShadeMat, cloudCount);
+      const cloudRight = new THREE.InstancedMesh(cloudGeo, cloudMat, cloudCount);
+      const cloudCrown = new THREE.InstancedMesh(cloudGeo, cloudMat, cloudCount);
+      for (let i = 0; i < cloudCount; i++) {
         const ang = rnd() * Math.PI * 2;
         const dist = 200 + rnd() * spread;
-        const sx = 40 + rnd() * 70;
-        m4.compose(
-          new THREE.Vector3(cx + Math.cos(ang) * dist, G + 280 + rnd() * 240, cz + Math.sin(ang) * dist),
-          new THREE.Quaternion().setFromEuler(new THREE.Euler(0, rnd() * 3, 0)),
-          new THREE.Vector3(sx, sx * 0.42, sx * 0.8),
-        );
-        clouds.setMatrixAt(i, m4);
+        const size = 34 + rnd() * 62;
+        const center = new THREE.Vector3(cx + Math.cos(ang) * dist, G + 280 + rnd() * 240, cz + Math.sin(ang) * dist);
+        const cloudQ = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, rnd() * Math.PI, 0));
+        m4.compose(center, cloudQ, new THREE.Vector3(size, size * 0.40, size * 0.68));
+        cloudCore.setMatrixAt(i, m4);
+        m4.compose(center.clone().add(new THREE.Vector3(-size * 0.58, -size * 0.02, size * 0.08)), cloudQ, new THREE.Vector3(size * 0.68, size * 0.32, size * 0.50));
+        cloudLeft.setMatrixAt(i, m4);
+        m4.compose(center.clone().add(new THREE.Vector3(size * 0.57, size * 0.01, -size * 0.06)), cloudQ, new THREE.Vector3(size * 0.72, size * 0.34, size * 0.54));
+        cloudRight.setMatrixAt(i, m4);
+        m4.compose(center.clone().add(new THREE.Vector3(size * 0.03, size * 0.27, 0)), cloudQ, new THREE.Vector3(size * 0.64, size * 0.43, size * 0.52));
+        cloudCrown.setMatrixAt(i, m4);
       }
-      clouds.instanceMatrix.needsUpdate = true;
-      st.sceneryGroup.add(clouds);
+      for (const cloud of [cloudCore, cloudLeft, cloudRight, cloudCrown]) cloud.instanceMatrix.needsUpdate = true;
+      st.sceneryGroup.add(cloudCore, cloudLeft, cloudRight, cloudCrown);
 
       // Shadow camera
       const rad = built.radius3 + 180;
@@ -2058,6 +2368,63 @@ export default function Ride3D({
       const b = f.bank + dynamicLean;
       nb.copy(tmpN).multiplyScalar(Math.cos(b)).addScaledVector(tmpR, -Math.sin(b)).normalize();
       rb.copy(tmpR).multiplyScalar(Math.cos(b)).addScaledVector(tmpN, Math.sin(b)).normalize();
+
+      // Animate water surfaces and integrate waterfall spray ballistically in world units.
+      for (const surface of st.waterSurfaces) {
+        const material = surface.mesh.material as THREE.MeshPhysicalMaterial;
+        material.opacity = 0.73 + Math.sin(now * 0.0014 + surface.phase) * 0.045;
+        surface.ripples.forEach((ripple, index) => {
+          const cycle = (now * 0.00012 + ripple.userData.phase) % 1;
+          const baseScale = ripple.userData.baseScale as number;
+          ripple.scale.setScalar(baseScale * (0.72 + cycle * 0.72));
+          (ripple.material as THREE.MeshBasicMaterial).opacity = (1 - cycle) * 0.24;
+          ripple.position.y = surface.mesh.position.y + 0.08 + index * 0.012;
+        });
+      }
+      for (const effect of st.waterEffects) {
+        const fallSpeed = (35 + effect.flow * 13) * dt;
+        for (let i = 0; i < effect.fallPositions.length; i += 3) {
+          effect.fallPositions[i + 1] -= fallSpeed;
+          effect.fallPositions[i] += Math.sin(now * 0.002 + effect.fallSeeds[i]) * dt * 0.25;
+          if (effect.fallPositions[i + 1] < effect.bottomY) {
+            effect.fallPositions[i + 1] = effect.bottomY + effect.height;
+          }
+        }
+        effect.fall.geometry.attributes.position.needsUpdate = true;
+
+        const activeSplash = sim.phase === 'riding' && f.piece === effect.pieceIndex;
+        const spawnCount = activeSplash ? Math.max(1, Math.round(effect.flow * 95 * dt)) : 0;
+        for (let spawn = 0; spawn < spawnCount; spawn++) {
+          const i = effect.spawnCursor++ % effect.sprayLife.length;
+          const i3 = i * 3;
+          const angle = Math.random() * Math.PI * 2;
+          const outward = 9 + Math.random() * 22 * effect.flow;
+          effect.sprayPositions[i3] = f.px + (Math.random() - 0.5) * effect.width * 0.5;
+          effect.sprayPositions[i3 + 1] = f.py + 1 + Math.random() * 4;
+          effect.sprayPositions[i3 + 2] = f.pz + (Math.random() - 0.5) * effect.width * 0.5;
+          effect.sprayVelocities[i3] = Math.cos(angle) * outward + tmpT.x * sim.v * 0.28;
+          effect.sprayVelocities[i3 + 1] = 12 + Math.random() * 24;
+          effect.sprayVelocities[i3 + 2] = Math.sin(angle) * outward + tmpT.z * sim.v * 0.28;
+          effect.sprayLife[i] = 0.45 + Math.random() * 0.85;
+        }
+        let living = 0;
+        const drag = Math.exp(-dt * 1.6);
+        for (let i = 0; i < effect.sprayLife.length; i++) {
+          if (effect.sprayLife[i] <= 0) continue;
+          living++;
+          effect.sprayLife[i] -= dt;
+          const i3 = i * 3;
+          effect.sprayVelocities[i3] *= drag;
+          effect.sprayVelocities[i3 + 1] = effect.sprayVelocities[i3 + 1] * drag - (GRAVITY / METERS_PER_UNIT) * dt;
+          effect.sprayVelocities[i3 + 2] *= drag;
+          effect.sprayPositions[i3] += effect.sprayVelocities[i3] * dt;
+          effect.sprayPositions[i3 + 1] += effect.sprayVelocities[i3 + 1] * dt;
+          effect.sprayPositions[i3 + 2] += effect.sprayVelocities[i3 + 2] * dt;
+          if (effect.sprayPositions[i3 + 1] < effect.bottomY) effect.sprayLife[i] = 0;
+        }
+        effect.spray.visible = living > 0 || activeSplash;
+        effect.spray.geometry.attributes.position.needsUpdate = true;
+      }
 
       st.cockpit.visible = mode === 'pov';
 

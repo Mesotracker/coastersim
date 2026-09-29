@@ -171,6 +171,20 @@ function longitudinalAcceleration(
   }
 
   const poweredEnvelope = poweredSectionEnvelope(track, out);
+
+  // A waterfall curtain adds a small, velocity-dependent hydrodynamic impulse.
+  // Pools are detached scenery and therefore never influence coaster motion.
+  const waterfallFlow = track.scenery.reduce(
+    (sum, block) => block.kind === 'waterfall' && block.pieceIndex === out.piece
+      ? sum + Math.max(0.2, Math.min(2, block.flow ?? 1))
+      : sum,
+    0,
+  );
+  if (waterfallFlow > 0 && Math.abs(velV) > 0.2) {
+    const speedFactor = Math.max(0.35, Math.min(1.4, Math.abs(velV) / 18));
+    accel -= Math.sign(velV) * 0.34 * waterfallFlow * speedFactor * poweredEnvelope;
+  }
+
   if (out.special === 1 && velV > 5.5) {
     accel -= cfg.brakeForce * poweredEnvelope;
   } else if (out.special === 2 && velV > -0.5) {
@@ -605,6 +619,9 @@ export function stepSim(st: SimState, track: BuiltTrack, dt: number, cfg: SimSet
 
   st.runTime += dt;
   frameAt(track, st.s, f);
+  const inWaterfall = track.scenery.some(
+    (block) => block.kind === 'waterfall' && block.pieceIndex === f.piece,
+  );
 
   // Exact passenger G-force in the car's local banked frame
   const kappaM = f.kappa / METERS_PER_UNIT;
@@ -644,6 +661,8 @@ export function stepSim(st: SimState, track: BuiltTrack, dt: number, cfg: SimSet
     if (st.eventT <= 0 && st.g < 0.05 && st.speed > 16) {
       setEvent(st, 'AIRTIME!', 0.9);
     }
+  } else if (inWaterfall && st.eventT <= 0.25) {
+    setEvent(st, 'WATERFALL SPLASH!', 0.8);
   }
 
   // Record telemetry point for the speed graph over time (smooth ~12 Hz sampling)
@@ -680,6 +699,6 @@ export function stepSim(st: SimState, track: BuiltTrack, dt: number, cfg: SimSet
   const gRatio = Math.max(0, Math.abs(st.g - 1) - 1.2) * 0.15;
   const baseShake = Math.min(1, speedRatio * 0.85 + gRatio) * matShakeFactor;
   // While airborne in mid-air jump, track contact vibration drops to near-zero!
-  const targetShake = f.special === 3 ? 0.03 : baseShake;
+  const targetShake = f.special === 3 ? 0.03 : Math.min(1.2, baseShake + (inWaterfall ? 0.22 : 0));
   st.shake += (targetShake - st.shake) * Math.min(1, dt * 5);
 }

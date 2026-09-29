@@ -4,6 +4,8 @@ import {
   PIECE_DEFS,
   Piece,
   PieceKind,
+  SceneryBlock,
+  SceneryKind,
   TrackDef,
   frameAt,
   indexAt,
@@ -19,11 +21,15 @@ interface Props {
   simRef: React.RefObject<SimState>;
   theme: Theme;
   selected: number | null;
+  selectedSceneryId: string | null;
   snap: boolean;
   onSelect: (index: number | null) => void;
+  onSelectScenery: (id: string | null) => void;
+  onUpdateScenery: (id: string, patch: Partial<SceneryBlock>) => void;
   onHoverPiece?: (index: number | null) => void;
   onChange: (t: TrackDef, commit?: boolean) => void;
   onInsert: (kind: PieceKind, index: number) => void;
+  onAddScenery: (kind: SceneryKind) => void;
   fitSignal: number;
 }
 
@@ -37,6 +43,7 @@ type DragMode =
   | { type: 'none' }
   | { type: 'pan'; sx: number; sy: number; cx: number; cy: number }
   | { type: 'origin'; ox: number; oy: number }
+  | { type: 'scenery'; id: string }
   | {
       type: 'node';
       index: number;
@@ -58,11 +65,13 @@ export default function Editor2D(props: Props) {
   const viewRef = useRef<View>({ cx: 260, cy: 90, zoom: 1 });
   const sizeRef = useRef({ w: 800, h: 600, dpr: 1 });
   const dragRef = useRef<DragMode>({ type: 'none' });
-  const hoverRef = useRef<{ piece: number | null; node: number | null; origin: boolean }>({
+  const hoverRef = useRef<{ piece: number | null; node: number | null; origin: boolean; sceneryId: string | null }>({
     piece: null,
     node: null,
     origin: false,
+    sceneryId: null,
   });
+  const minimapRef = useRef({ x: 0, y: 0, w: 0, h: 0, scale: 1, cx: 0, cz: 0 });
   const dropRef = useRef<{ index: number; x: number; y: number } | null>(null);
   const activePointersRef = useRef<Map<number, { sx: number; sy: number }>>(new Map());
   const initialPinchDistRef = useRef<number>(0);
@@ -416,17 +425,18 @@ export default function Editor2D(props: Props) {
         ctx.fill();
       }
 
-      // top-down minimap
-      const MM = 104;
+      // Interactive top-down environment map. Detached pools can be dragged in
+      // world X/Z while caves and waterfalls show their live track attachment.
+      const MM = Math.min(158, Math.max(122, w * 0.22));
       const pad = 10;
       const mx = w - MM - pad;
       const my = pad;
       ctx.save();
-      ctx.fillStyle = 'rgba(7,10,14,0.90)';
-      ctx.strokeStyle = 'rgba(212,175,55,0.46)';
+      ctx.fillStyle = 'rgba(7,10,14,0.94)';
+      ctx.strokeStyle = 'rgba(212,175,55,0.58)';
       ctx.lineWidth = 1;
       ctx.beginPath();
-      ctx.roundRect(mx, my, MM, MM, 8);
+      ctx.roundRect(mx, my, MM, MM, 10);
       ctx.fill();
       ctx.stroke();
       let miX = Infinity;
@@ -440,11 +450,19 @@ export default function Editor2D(props: Props) {
         if (p.pz < miZ) miZ = p.pz;
         if (p.pz > maZ) maZ = p.pz;
       }
-      const spanX = Math.max(40, maX - miX);
-      const spanZ = Math.max(40, maZ - miZ);
-      const sc = (MM - 22) / Math.max(spanX, spanZ);
+      for (const block of built.scenery) {
+        if (block.kind !== 'waterPool') continue;
+        miX = Math.min(miX, block.x);
+        maX = Math.max(maX, block.x);
+        miZ = Math.min(miZ, block.z);
+        maZ = Math.max(maZ, block.z);
+      }
+      const spanX = Math.max(70, maX - miX);
+      const spanZ = Math.max(70, maZ - miZ);
+      const sc = (MM - 28) / Math.max(spanX, spanZ);
       const mcx = mx + MM / 2 - ((miX + maX) / 2) * sc;
       const mcy = my + MM / 2 - ((miZ + maZ) / 2) * sc;
+      minimapRef.current = { x: mx, y: my, w: MM, h: MM, scale: sc, cx: mcx, cz: mcy };
       ctx.beginPath();
       for (let i = 0; i < n; i += 2) {
         const p = S[i];
@@ -454,20 +472,61 @@ export default function Editor2D(props: Props) {
         else ctx.lineTo(sxp, syp);
       }
       ctx.strokeStyle = theme.spine;
-      ctx.lineWidth = 1.8;
+      ctx.lineWidth = 2.1;
       ctx.stroke();
+
+      const blockPosition = (block: SceneryBlock) => {
+        if (block.kind === 'waterPool' || block.pieceIndex == null) return { x: block.x, z: block.z };
+        const range = built.pieceRanges[Math.max(0, Math.min(built.pieceRanges.length - 1, block.pieceIndex))];
+        const sm = range ? S[Math.floor((range.start + range.end) / 2)] : null;
+        return { x: sm?.px ?? block.x, z: sm?.pz ?? block.z };
+      };
+      for (const block of built.scenery) {
+        const pos = blockPosition(block);
+        const iconOffset = block.kind === 'cave' ? -5 : block.kind === 'waterfall' ? 5 : 0;
+        const bx = mcx + pos.x * sc + iconOffset;
+        const by = mcy + pos.z * sc;
+        const selectedBlock = block.id === pRef.current.selectedSceneryId;
+        ctx.beginPath();
+        if (block.kind === 'waterPool') {
+          ctx.ellipse(bx, by, Math.max(4, 9 * block.scale), Math.max(3, 5 * block.scale), 0, 0, Math.PI * 2);
+          ctx.fillStyle = 'rgba(56,189,248,.52)';
+        } else if (block.kind === 'cave') {
+          ctx.rect(bx - 5, by - 5, 10, 10);
+          ctx.fillStyle = 'rgba(168,162,158,.72)';
+        } else {
+          ctx.moveTo(bx, by - 7);
+          ctx.lineTo(bx + 6, by + 5);
+          ctx.lineTo(bx - 6, by + 5);
+          ctx.closePath();
+          ctx.fillStyle = 'rgba(96,165,250,.82)';
+        }
+        ctx.fill();
+        ctx.lineWidth = selectedBlock ? 2.5 : 1;
+        ctx.strokeStyle = selectedBlock ? '#f2c14e' : 'rgba(255,255,255,.62)';
+        ctx.stroke();
+        if (selectedBlock) {
+          ctx.beginPath();
+          ctx.arc(bx, by, 10, 0, Math.PI * 2);
+          ctx.setLineDash([3, 3]);
+          ctx.strokeStyle = '#f2c14e';
+          ctx.stroke();
+          ctx.setLineDash([]);
+        }
+      }
+
       frameAt(built, sim.s, frame);
       ctx.beginPath();
-      ctx.arc(mcx + frame.px * sc, mcy + frame.pz * sc, 3, 0, Math.PI * 2);
+      ctx.arc(mcx + frame.px * sc, mcy + frame.pz * sc, 3.2, 0, Math.PI * 2);
       ctx.fillStyle = theme.car;
       ctx.fill();
       ctx.strokeStyle = '#0f172a';
       ctx.lineWidth = 1;
       ctx.stroke();
-      ctx.fillStyle = 'rgba(232,198,106,0.88)';
+      ctx.fillStyle = 'rgba(232,198,106,0.92)';
       ctx.font = '700 8px ui-sans-serif, system-ui';
       ctx.textAlign = 'left';
-      ctx.fillText('TOP VIEW', mx + 7, my + 12);
+      ctx.fillText('ENV MAP · DRAG BLOCKS', mx + 8, my + 13);
       ctx.restore();
     };
     raf = requestAnimationFrame(draw);
@@ -477,12 +536,35 @@ export default function Editor2D(props: Props) {
   // ------------------------------------------------------------ interaction
   const pickAt = useCallback((sx: number, sy: number) => {
     const { built } = pRef.current;
+    const map = minimapRef.current;
+    if (sx >= map.x && sx <= map.x + map.w && sy >= map.y && sy <= map.y + map.h) {
+      let sceneryId: string | null = null;
+      let closest = 14;
+      for (const block of [...built.scenery].reverse()) {
+        let x = block.x;
+        let z = block.z;
+        if (block.kind !== 'waterPool' && block.pieceIndex != null) {
+          const range = built.pieceRanges[Math.max(0, Math.min(built.pieceRanges.length - 1, block.pieceIndex))];
+          const sm = range ? built.samples[Math.floor((range.start + range.end) / 2)] : null;
+          x = sm?.px ?? x;
+          z = sm?.pz ?? z;
+        }
+        const iconOffset = block.kind === 'cave' ? -5 : block.kind === 'waterfall' ? 5 : 0;
+        const distance = Math.hypot(map.cx + x * map.scale + iconOffset - sx, map.cz + z * map.scale - sy);
+        if (distance < closest) {
+          closest = distance;
+          sceneryId = block.id;
+        }
+      }
+      return { origin: false, node: null as number | null, piece: null as number | null, sceneryId };
+    }
+
     const v = viewRef.current;
     const wp = toWorld(sx, sy);
     const tol = 12 / v.zoom;
     // origin
     if (Math.hypot(built.samples[0].x - wp.x, built.samples[0].y - wp.y) < tol) {
-      return { origin: true, node: null as number | null, piece: null as number | null };
+      return { origin: true, node: null as number | null, piece: null as number | null, sceneryId: null as string | null };
     }
     let node: number | null = null;
     let best = tol;
@@ -493,7 +575,7 @@ export default function Editor2D(props: Props) {
         node = i;
       }
     });
-    if (node !== null) return { origin: false, node, piece: node };
+    if (node !== null) return { origin: false, node, piece: node, sceneryId: null };
     // piece body
     let piece: number | null = null;
     let bestD = 14 / v.zoom;
@@ -505,7 +587,7 @@ export default function Editor2D(props: Props) {
         piece = S[i].piece;
       }
     }
-    return { origin: false, node: null, piece };
+    return { origin: false, node: null, piece, sceneryId: null };
   }, [toWorld]);
 
   const startNodeDrag = useCallback((index: number, grab: { x: number; y: number }) => {
@@ -551,10 +633,20 @@ export default function Editor2D(props: Props) {
       }
 
       const hit = pickAt(sx, sy);
+      if (hit.sceneryId) {
+        pRef.current.onSelectScenery(hit.sceneryId);
+        pRef.current.onSelect(null);
+        const block = pRef.current.built.scenery.find((item) => item.id === hit.sceneryId);
+        dragRef.current = block?.kind === 'waterPool' ? { type: 'scenery', id: hit.sceneryId } : { type: 'none' };
+        return;
+      }
       if (e.button === 1 || e.shiftKey || (!hit.origin && hit.piece === null)) {
         const v = viewRef.current;
         dragRef.current = { type: 'pan', sx, sy, cx: v.cx, cy: v.cy };
-        if (!hit.origin && hit.piece === null) pRef.current.onSelect(null);
+        if (!hit.origin && hit.piece === null) {
+          pRef.current.onSelect(null);
+          pRef.current.onSelectScenery(null);
+        }
         return;
       }
       if (hit.origin) {
@@ -565,6 +657,7 @@ export default function Editor2D(props: Props) {
           oy: pRef.current.track.origin.y - wp.y,
         };
         pRef.current.onSelect(null);
+        pRef.current.onSelectScenery(null);
         return;
       }
       if (hit.piece !== null) {
@@ -601,7 +694,7 @@ export default function Editor2D(props: Props) {
 
       if (d.type === 'none') {
         const hit = pickAt(sx, sy);
-        hoverRef.current = { piece: hit.piece, node: hit.node, origin: hit.origin };
+        hoverRef.current = { piece: hit.piece, node: hit.node, origin: hit.origin, sceneryId: hit.sceneryId };
         pRef.current.onHoverPiece?.(hit.piece);
         return;
       }
@@ -609,6 +702,17 @@ export default function Editor2D(props: Props) {
         const v = viewRef.current;
         v.cx = d.cx - (sx - d.sx) / v.zoom;
         v.cy = d.cy + (sy - d.sy) / v.zoom;
+        return;
+      }
+      if (d.type === 'scenery') {
+        const map = minimapRef.current;
+        let x = (sx - map.cx) / map.scale;
+        let z = (sy - map.cz) / map.scale;
+        if (snap) {
+          x = Math.round(x / 5) * 5;
+          z = Math.round(z / 5) * 5;
+        }
+        pRef.current.onUpdateScenery(d.id, { x, z });
         return;
       }
       const wp = toWorld(sx, sy);
@@ -716,6 +820,12 @@ export default function Editor2D(props: Props) {
   const onDrop = useCallback(
     (e: React.DragEvent) => {
       e.preventDefault();
+      const sceneryKind = e.dataTransfer.getData('text/coaster-scenery') as SceneryKind;
+      if (sceneryKind === 'waterPool' || sceneryKind === 'cave' || sceneryKind === 'waterfall') {
+        dropRef.current = null;
+        pRef.current.onAddScenery(sceneryKind);
+        return;
+      }
       const kind = (e.dataTransfer.getData('text/coaster-piece') ||
         e.dataTransfer.getData('text/plain')) as PieceKind;
       const d = dropRef.current;
@@ -727,9 +837,9 @@ export default function Editor2D(props: Props) {
   );
 
   const cursor =
-    dragRef.current.type === 'pan'
+    dragRef.current.type === 'pan' || dragRef.current.type === 'scenery'
       ? 'grabbing'
-      : hoverRef.current.origin || hoverRef.current.node !== null
+      : hoverRef.current.origin || hoverRef.current.node !== null || hoverRef.current.sceneryId !== null
         ? 'grab'
         : 'default';
 
@@ -757,7 +867,7 @@ export default function Editor2D(props: Props) {
         onWheel={onWheel}
       />
       <div className="pointer-events-none absolute bottom-3 left-3 hidden rounded-xl bg-white/90 px-3 py-1.5 text-xs font-semibold text-slate-600 shadow-sm ring-1 ring-slate-200/80 backdrop-blur md:block">
-        <span className="text-slate-900 font-bold">2D Layout:</span> Drag piece to reshape · Drag station to move · Scroll to zoom · Shift+drag to pan
+        <span className="text-slate-900 font-bold">Layout:</span> Drag track nodes · Drag pools in ENV MAP · Scroll zoom · Shift+drag pan
       </div>
       <div className="absolute right-3 bottom-3 flex items-center gap-1.5 rounded-xl bg-white/95 p-1 shadow-md ring-1 ring-slate-200/80 backdrop-blur">
         <button

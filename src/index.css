@@ -145,6 +145,21 @@ button:focus-visible, select:focus-visible, input:focus-visible, textarea:focus-
 .premium-shell button:not(:disabled):active { transform: translateY(1px); }
 .premium-shell ::selection { color: #151008; background: #e8c66a; }
 
+@media (max-width: 1560px) {
+  .premium-metrics { display: none !important; }
+}
+
+@media (max-width: 1320px) {
+  .premium-material { display: none !important; }
+  .premium-header { gap: .65rem; }
+}
+
+@media (max-height: 760px) and (min-width: 1024px) {
+  .premium-workspace { padding-top: .4rem !important; padding-bottom: .4rem !important; gap: .4rem !important; }
+  .premium-designer { gap: .45rem !important; }
+  .premium-designer > :first-child { padding-top: .45rem !important; padding-bottom: .45rem !important; }
+}
+
 @media (max-width: 1023px) {
   .premium-header { overflow-x: auto; }
   .premium-shell::before { height: 1px; }

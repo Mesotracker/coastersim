@@ -44,10 +44,35 @@ export interface Piece {
   boostIntensity?: number;
 }
 
+export type SceneryKind = 'waterPool' | 'cave' | 'waterfall';
+
+export interface SceneryBlock {
+  id: string;
+  kind: SceneryKind;
+  /** Detached world-space placement for pools and editor map handles. */
+  x: number;
+  z: number;
+  /** Scale controls pool radius, tunnel clearance, or waterfall curtain width. */
+  scale: number;
+  /** Pools are clamped to groundY + elevation. */
+  elevation: number;
+  /** Cave / waterfall attachment. Water pools deliberately leave this undefined. */
+  pieceIndex?: number;
+  /** Cave architectural lighting. */
+  lamps?: boolean;
+  lampColor?: string;
+  lampDensity?: number;
+  /** Water volume multiplier and associated hydrodynamic speed loss. */
+  flow?: number;
+  /** Optional cave parent so waterfalls render beneath the same rocky envelope. */
+  parentId?: string;
+}
+
 export interface TrackDef {
   origin: { x: number; y: number };
   startPitch: number; // degrees
   pieces: Piece[];
+  scenery?: SceneryBlock[];
 }
 
 export interface Seg {
@@ -358,6 +383,7 @@ export interface BuiltTrack {
   center3: { x: number; z: number };
   radius3: number;
   pieces?: Piece[];
+  scenery: SceneryBlock[];
 }
 
 const DEG = Math.PI / 180;
@@ -583,6 +609,7 @@ export function buildTrack(track: TrackDef): BuiltTrack {
     center3: { x: cx, z: cz },
     radius3,
     pieces: track.pieces,
+    scenery: track.scenery ?? [],
   };
 }
 
@@ -682,6 +709,21 @@ let uid = 0;
 export function newPiece(kind: PieceKind): Piece {
   uid += 1;
   return { id: `p${uid}_${Math.random().toString(36).slice(2, 7)}`, kind, len: 1, power: 1, rot: 0 };
+}
+
+export function newSceneryBlock(kind: SceneryKind, overrides?: Partial<SceneryBlock>): SceneryBlock {
+  uid += 1;
+  const base: SceneryBlock = {
+    id: `s${uid}_${Math.random().toString(36).slice(2, 7)}`,
+    kind,
+    x: 0,
+    z: 0,
+    scale: kind === 'waterPool' ? 1.4 : 1,
+    elevation: kind === 'waterPool' ? 0.18 : 0,
+    ...(kind === 'cave' ? { lamps: true, lampColor: '#f2c14e', lampDensity: 1 } : {}),
+    ...(kind === 'waterfall' ? { flow: 1 } : {}),
+  };
+  return overrides ? { ...base, ...overrides } : base;
 }
 
 export function piece(kind: PieceKind, overrides?: Partial<Piece>): Piece {
@@ -1034,5 +1076,19 @@ export const PRESETS: Preset[] = [
 ];
 
 export function defaultTrack(): TrackDef {
-  return PRESETS[0].build();
+  const track = PRESETS[0].build();
+  const cave = newSceneryBlock('cave', {
+    pieceIndex: 8,
+    lamps: true,
+    lampColor: '#f2c14e',
+    lampDensity: 1.1,
+  });
+  return {
+    ...track,
+    scenery: [
+      newSceneryBlock('waterPool', { x: 285, z: 105, scale: 1.65, elevation: 0.18 }),
+      cave,
+      newSceneryBlock('waterfall', { pieceIndex: 8, parentId: cave.id, scale: 1.05, flow: 0.75 }),
+    ],
+  };
 }
